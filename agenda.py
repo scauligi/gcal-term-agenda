@@ -69,6 +69,16 @@ def tdtime(td):
         s += 's' if minutes != 1 else ''
     return s
 
+def as_date(date_or_datetime):
+    if isinstance(date_or_datetime, datetime):
+        return date_or_datetime.date()
+    return date_or_datetime
+
+def as_datetime(date_or_datetime):
+    if isinstance(date_or_datetime, date) and not isinstance(date_or_datetime, datetime):
+        return datetime.combine(date_or_datetime, time(0), tzlocal())
+    return date_or_datetime
+
 # this exists purely because pyyaml is stupid
 # and parses datetimes back as naive (utc-based) datetimes
 tzl = tzlocal()
@@ -134,13 +144,9 @@ def download_evts(today):
         for e in r['items']:
             ev = Event.unpkg(e)
             ev.calendar = calId
-            if isinstance(ev.start, datetime):
-                evs.append(ev)
-            else:
-                day_evs.append(ev)
-    evs.sort(key=lambda ev: ev.start)
-    day_evs.sort(key=lambda ev: ev.start)
-    obj = {'events': evs, 'day_events': day_evs, 'calendars': cals, 'timestamp': now}
+            evs.append(ev)
+    evs.sort(key=lambda e: (as_datetime(e.start), reversor(as_datetime(e.end))))
+    obj = {'events': evs, 'calendars': cals, 'timestamp': now}
     with open('evts.yaml', 'w') as f:
         yaml.dump(obj, f, default_flow_style=False)
     return obj
@@ -168,128 +174,124 @@ def load_evts(today=None, no_download=False):
         obj = download_evts(today)
     return obj
 
-def agenda(clear=False, aday=None, no_download=False):
-    now = datetime.now(tzlocal())
-    today = datetime.combine(aday or date.today(), time(0), tzlocal())
-    obj = load_evts(today, no_download=no_download)
+class Agenda:
+    def __init__(self, clear=False, aday=None, no_download=False):
+        self.clear = clear
 
-    cal2short = {}
-    for cal in obj['calendars']:
-        cal2short[cal['id']] = rgb2short(cal['backgroundColor'])[0]
+        self.now = datetime.now(tzlocal())
+        self.todate = as_date(aday or date.today())
+        self.today = datetime.combine(self.todate, time(0), tzlocal())
+        self.obj = load_evts(self.today, no_download=no_download)
 
-    tick = today
-    interval = t(minutes=15)
+        self.interval = t(minutes=15)
 
-    table = []
-    lines = []
-    current_events = []
+        self.cal2short = {}
+        for cal in self.obj['calendars']:
+            self.cal2short[cal['id']] = rgb2short(cal['backgroundColor'])[0]
 
-    while tick.date() <= today.date() + t(days=1):
-        day = tick.date()
-        did_date = False
-        did_first = False
-        for evt in obj['events']:
-            if isinstance(evt.start, date) and not isinstance(evt.start, datetime):
-                datefield = ''
-                curline = ''
-                if evt.start <= tick.date() and evt.end > tick.date():
-                    curline = evt.summary
-                    curline = fg(cal2short[evt.calendar]) + curline
-                    curline += RESET
-                    if not datefield:
-                        if not did_date:
-                            datefield = dtime(day)
-                        else:
-                            datefield = dtime()
-                    table.append(datefield + ' ' + ftime().replace(' ', '-') + '  ' + curline)
-                    if not did_date:
-                        did_date = True
-        # increments tick/tock by interval
-        while tick.date() == day:
-            tock = tick + interval
-            datefield = ''
-            timefield = ''
-            curline = ''
-            for evt in current_events:
-                if evt.evt.end >= tick:
-                    if blen(curline) < evt.idx:
-                        curline += ' ' * (evt.idx - blen(curline))
-                    curline += fg(cal2short[evt.evt.calendar])
-                    if evt.evt.end == tock:
-                        curline += '_|_ '
-                    elif evt.evt.end < tock:
-                        curline += '-+- ({}) '.format(ftime(evt.evt.end).strip())
-                    else:
-                        curline += ' |  '
-                    curline += RESET
-            for evt in obj['events']:
-                if isinstance(evt.start, datetime):
-                    if evt.start >= tick and evt.start < tock:
-                        if evt.end > now:
-                            current_events.append(CurEvent(evt, blen(curline)))
-                        summary = evt.summary + ' ' + evt.location
-                        summary = fg(cal2short[evt.calendar]) + summary
-                        if not timefield:
-                            timefield = ftime(evt.start)
-                        else:
-                            summary = '   ' + summary
-                            if current_events:
-                                current_events[-1].idx += 3
-                            if ftime(evt.start) != timefield:
-                                summary += ' ({})'.format(ftime(evt.start).strip())
-                        summary += RESET
-                        curline += summary
-                        if evt.end > tick and evt.end <= tock:
-                            try:
-                                current_events.remove(evt)
-                            except ValueError:
-                                pass
-                            if evt.end != evt.start:
-                                curline += fg(cal2short[evt.calendar])
-                                curline += ' (-> {})'.format(ftime(evt.end).strip())
-                                curline += RESET
-                    elif evt.end > tick and evt.end <= tock:
-                        try:
-                            current_events.remove(evt)
-                        except ValueError:
-                            pass
-            if now >= tick and now < tock:
-                curline += '  <-- ' + ftime(now, now=True)
-            if not timefield:
-                timefield = ftime()
-            if not datefield:
-                if not did_date:
-                    datefield = dtime(day)
-                else:
-                    datefield = dtime()
-            lines.append(datefield + ' ' + timefield + '  ' + curline)
-            if curline:
-                if not did_first or tick <= now:
-                    lines = [lines[-1]]
-                    did_first = True
-                    did_date = True
-                table += lines
-                lines = []
-            tick = tock
-        if table and not '<--' in table[-1]:
-            break
+    def _commit(self):
+        if self.now >= self.tick and self.now < self.tock:
+            self.curline += '  <-- ' + ftime(self.now, now=True)
+        if self.curline or (self.did_first and self.tick > self.now):
+            if not self.timefield:
+                self.timefield = ftime()
+            self.table.append(self.datefield + ' ' + self.timefield + '  ' + self.curline)
+            self.datefield = dtime()
+            self.timefield = ''
+            self.curline = ''
+            self.did_first = True
 
-    termsize = os.get_terminal_size()
-    fillout = termsize.columns if clear else 0
+    def _advance(self):
+        self.tick += self.interval
+        self.tock = self.tick + self.interval
+        i = 0
+        while i < len(self.current_events):
+            curevt = self.current_events[i]
+            assert curevt.evt.end >= self.tick
+            if blen(self.curline) < curevt.idx:
+                self.curline += ' ' * (curevt.idx - blen(self.curline))
+            self.curline += fg(self.cal2short[curevt.evt.calendar])
+            if curevt.evt.end == self.tock:
+                self.curline += '_|_ '
+                self.current_events.pop(i)
+            elif curevt.evt.end < self.tock:
+                self.curline += '-+- ({}) '.format(ftime(curevt.evt.end).strip())
+                self.current_events.pop(i)
+            else:
+                self.curline += ' |  '
+                i += 1
+            self.curline += RESET
 
-    lines = re.sub(r'\n{8,}', r'\n'*8, '\n'.join(line.rstrip() for line in table)).split('\n')
-    if clear:
-        lines = [line + ' ' * (fillout - blen(line)) for line in lines]
-        print('\033[H')
-    print('\n'.join(lines))
-    if clear:
-        for i in range(len(lines), termsize.lines - 1):
-            print(' ' * termsize.columns)
+    def agenda_table(self):
+        self.tick = self.today
+        self.tock = self.tick + self.interval
 
-def as_datetime(date_or_datetime):
-    if isinstance(date_or_datetime, date) and not isinstance(date_or_datetime, datetime):
-        return datetime.combine(date_or_datetime, time(0), tzlocal())
-    return date_or_datetime
+        self.table = []
+        self.current_events = []
+
+        enddate = self.todate + t(days=1)
+
+        last_date = None
+        self.did_first = False
+        self.datefield = ''
+        self.timefield = ''
+        self.curline = ''
+        for evt in self.obj['events']:
+            start = as_date(evt.start)
+            end = as_date(evt.end)
+            if end < self.todate:
+                continue
+            elif start >= enddate:
+                break
+            day = as_date(evt.start)
+            if day != last_date:
+                self.datefield = dtime(day)
+                last_date = day
+            if not isinstance(evt.start, datetime):
+                dateline = evt.summary
+                dateline = fg(self.cal2short[evt.calendar]) + dateline
+                dateline += RESET
+                self.table.append(self.datefield + ' ' + ftime().replace(' ', '-') + '  ' + dateline)
+                self.datefield = dtime()
+                continue
+            while self.tick < as_datetime(evt.start):
+                self._commit()
+                self._advance()
+            summary = evt.summary + ' ' + evt.location
+            summary = fg(self.cal2short[evt.calendar]) + summary
+            if not self.timefield:
+                self.timefield = ftime(evt.start)
+            else:
+                self.curline += '   '
+                if ftime(evt.start) != self.timefield:
+                    summary += ' ({})'.format(ftime(evt.start).strip())
+            if evt.end <= self.tock and evt.end != evt.start:
+                summary += ' (-> {})'.format(ftime(evt.end).strip())
+            summary += RESET
+            if evt.end > self.now and evt.end > self.tock:
+                self.current_events.append(CurEvent(evt, blen(self.curline)))
+            self.curline += summary
+        while self.current_events:
+            self._commit()
+            self._advance()
+        self._commit()
+
+        return self.table
+
+
+    def print_table(self, table):
+        termsize = os.get_terminal_size()
+        fillout = termsize.columns if self.clear else 0
+
+        lines = re.sub(r'\n{8,}', r'\n'*8, '\n'.join(line.rstrip() for line in table)).split('\n')
+        if self.clear:
+            lines = [line + ' ' * (fillout - blen(line)) for line in lines]
+            print('\033[H')
+        print('\n'.join(lines))
+        if self.clear:
+            for i in range(len(lines), termsize.lines - 1):
+                print(' ' * termsize.columns)
+
 
 def listcal(calendars, aday=None, no_download=False):
     today = datetime.combine(aday or date.today(), time(0), tzlocal())
@@ -334,7 +336,7 @@ def listcal(calendars, aday=None, no_download=False):
         cal2short[cal['id']] = rgb2short(cal['backgroundColor'])[0]
 
     seen = Counter()
-    for evt in sorted(obj['events'], key=lambda e: (as_datetime(e.start), reversor(as_datetime(e.end)))):
+    for evt in obj['events']:
         if evt.calendar not in callist:
             continue
         start = as_datetime(evt.start)
@@ -382,4 +384,6 @@ if __name__ == '__main__':
     if args.list_calendar:
         listcal(args.list_calendar, aday=aday, no_download=no_download)
         exit(0)
-    agenda(aday=aday, no_download=no_download, clear=args.clear)
+    agendamaker = Agenda(aday=aday, no_download=no_download, clear=args.clear)
+    table = agendamaker.agenda_table()
+    agendamaker.print_table(table)
