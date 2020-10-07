@@ -72,9 +72,11 @@ def tdtime(td):
 # this exists purely because pyyaml is stupid
 # and parses datetimes back as naive (utc-based) datetimes
 def localize(dt):
+    tzl = tzlocal()
     if isinstance(dt, datetime):
         if not dt.tzinfo:
-            return dt.replace(tzinfo=timezone.utc).astimezone(tzlocal())
+            return tzl.fromutc(dt)
+            # return dt.replace(tzinfo=timezone.utc).astimezone()
     elif isinstance(dt, date):
         return dt
     return dt
@@ -177,6 +179,7 @@ def agenda(clear=False, aday=None, no_download=False):
     current_events = []
 
     while tick.date() <= today.date() + t(days=1):
+        ticktock = tick + tock
         day = tick.date()
         did_date = False
         did_first = False
@@ -205,19 +208,19 @@ def agenda(clear=False, aday=None, no_download=False):
                     if blen(curline) < evt.idx:
                         curline += ' ' * (evt.idx - blen(curline))
                     curline += fg(cal2short[evt.evt.calendar])
-                    if evt.evt.end == tick + tock:
+                    if evt.evt.end == ticktock:
                         curline += '_|_ '
-                    elif evt.evt.end < (tick + tock):
+                    elif evt.evt.end < (ticktock):
                         curline += '-+- ({}) '.format(ftime(evt.evt.end).strip())
                     else:
                         curline += ' |  '
                     curline += RESET
             for evt in obj['events']:
                 if isinstance(evt.start, datetime):
-                    if evt.start >= tick and evt.start < (tick + tock):
+                    if evt.start >= tick and evt.start < (ticktock):
                         if evt.end > now:
                             current_events.append(CurEvent(evt, blen(curline)))
-                        summary = evt.summary
+                        summary = evt.summary + ' ' + evt.location
                         summary = fg(cal2short[evt.calendar]) + summary
                         if not timefield:
                             timefield = ftime(evt.start)
@@ -229,7 +232,7 @@ def agenda(clear=False, aday=None, no_download=False):
                                 summary += ' ({})'.format(ftime(evt.start).strip())
                         summary += RESET
                         curline += summary
-                        if evt.end > tick and evt.end <= (tick + tock):
+                        if evt.end > tick and evt.end <= (ticktock):
                             try:
                                 current_events.remove(evt)
                             except ValueError:
@@ -238,12 +241,12 @@ def agenda(clear=False, aday=None, no_download=False):
                                 curline += fg(cal2short[evt.calendar])
                                 curline += ' (-> {})'.format(ftime(evt.end).strip())
                                 curline += RESET
-                    elif evt.end > tick and evt.end <= (tick + tock):
+                    elif evt.end > tick and evt.end <= (ticktock):
                         try:
                             current_events.remove(evt)
                         except ValueError:
                             pass
-            if now >= tick and now < (tick + tock):
+            if now >= tick and now < (ticktock):
                 curline += '  <-- ' + ftime(now, now=True)
             if not timefield:
                 timefield = ftime()
