@@ -263,6 +263,9 @@ class Agenda:
                 self.datefield = dtime(day)
                 last_date = day
             if not isinstance(evt.start, datetime):
+                # kludgy bugfix
+                if evt.end == self.todate:
+                    continue
                 dateline = evt.summary
                 dateline = fg(self.cal2short[evt.calendar]) + dateline
                 dateline += RESET
