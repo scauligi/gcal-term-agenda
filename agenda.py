@@ -396,6 +396,133 @@ def listcal(calendars, aday=None, no_download=False):
             fmt += tdtime(evt.end - evt.start)
             print(fmt)
 
+
+CORNERS = """\
+┌┬┐
+├┼┤
+└┴┘""".split('\n')
+DASH = "─"
+PIPE = "│"
+
+def fourweek(calendars, aday=None, no_download=False):
+    termsize = os.get_terminal_size()
+
+    table_width = 7
+    table_height = 4
+
+    inner_width = (termsize.columns - (table_width + 1)) // table_width
+    inner_height = ((termsize.lines - 1) - (table_height + 1)) // table_height
+
+    table = []
+
+    def do_row(fill, left, mid=None, right=None):
+        if mid is None:
+            mid = left
+        if right is None:
+            right = left
+        line = left
+        for _ in range(table_width):
+            line += fill * inner_width + mid
+        line = line[:-1] + right
+        return line
+
+    # set up table borders
+    table.append(do_row(DASH, *CORNERS[0]))
+    for _ in range(table_height):
+        for _ in range(inner_height):
+            table.append([])
+            #table.append(do_row(' ', PIPE))
+        table.append(do_row(DASH, *CORNERS[1]))
+    table.pop()
+    table.append(do_row(DASH, *CORNERS[2]))
+
+    todate = as_date(aday) or date.today()
+    today = datetime.combine(todate, time(0), tzlocal())
+    obj = load_evts(today, no_download=no_download)
+
+    callist = []
+    allCals = get_visible_cals(obj['calendars'])
+    def _getCal(calendar):
+        if isinstance(calendar, list):
+            callist.extend(map(_getCal, calendar))
+        elif '@' not in calendar:
+            lookup = allCals.get(calendar)
+            if lookup is None:
+                print('Error: unknown calendar:', calendar, file=sys.stderr)
+                exit(1)
+            _getCal(lookup)
+        else:
+            callist.append(calendar)
+    _getCal(calendars)
+
+    offset = today.isoweekday() % 7
+
+    cal2short = {}
+    for cal in obj['calendars']:
+        cal2short[cal['id']] = rgb2short(cal['backgroundColor'])[0]
+
+    cells = [list() for _ in range(table_width * table_height)]
+
+    def shorten(text):
+        if len(text) > inner_width:
+            text = text[:inner_width-3] + '...'
+        return f'{text:<{inner_width}}'
+
+    for evt in obj['events']:
+        if evt.calendar not in callist:
+            continue
+        if evt.cancelled:
+            continue
+        start = as_datetime(evt.start)
+        end = as_datetime(evt.end)
+        cellnum = (start.date() - todate).days
+        cellnum += offset
+        if cellnum in range(0, len(cells)):
+            if isinstance(evt.start, datetime):
+                text = ftime(evt.start) + ' ' + evt.summary
+            else:
+                text = ' ' + evt.summary
+            text = shorten(text)
+            text = fg(cal2short[evt.calendar]) + text + RESET
+            cells[cellnum].append(text)
+        if not isinstance(evt.start, datetime) and (end - start).days > 1:
+            for day in range(1, (evt.end - evt.start).days):
+                cellnum = (start.date() - todate).days + offset + day
+                if cellnum in range(0, len(cells)):
+                    text = '> ' + evt.summary
+                    text = shorten(text)
+                    text = fg(cal2short[evt.calendar]) + text + RESET
+                    cells[cellnum].append(text)
+
+    # overwrite table with content of cells
+    for i in range(table_height):
+        for j in range(table_width):
+            for l in range(inner_height):
+                lineIndex = i * (inner_height + 1) + l + 1
+                cell = cells[i * table_width + j]
+                text = ' ' * inner_width
+                if l == 0:
+                    datetext = dtime(todate + t(days=(i * table_width + j - offset)))
+                    if i * table_width + j == offset:
+                        datetext = f'> {datetext} <'
+                    text = shorten(f'{datetext:^{inner_width}}')
+                elif l == 1:
+                    text = DASH * inner_width
+                else:
+                    l -= 2
+                    if l + 2 == inner_height - 1 and len(cell) > l + 1:
+                        text = shorten(format('... more ...', f'^{inner_width}'))
+                        # dark blue
+                        text = '\033[34m' + text + RESET
+                    elif l < len(cell):
+                        text = cell[l]
+                table[lineIndex].append(text)
+
+    for line in table:
+        if isinstance(line, list):
+            line = PIPE + PIPE.join(line) + PIPE
+        print(line)
+
 if __name__ == '__main__':
     import sys
     import argparse
@@ -405,6 +532,7 @@ if __name__ == '__main__':
     parser.add_argument('-n', '--no-download', action='store_true', help="don't attempt to refresh the calendar cache")
     parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
     parser.add_argument('-l', '--list-calendar', metavar='CALENDAR', action='append', help='print a list of events from the specified calendar(s)')
+    parser.add_argument('-x', '--four-week', metavar='CALENDAR', action='append', help='print a four-week diagram of the specified calendar(s)')
     parser.add_argument('date', nargs='*', help='use this date instead of today')
     args = parser.parse_args()
     no_download = args.no_download and not args.force_download_check
@@ -417,8 +545,14 @@ if __name__ == '__main__':
         import parsedatetime
         pdt = parsedatetime.Calendar()
         aday = datetime(*pdt.parse(' '.join(args.date))[0][:6])
+    if args.list_calendar and args.four_week:
+        print("error: cannot specify both -l and -x", file=sys.stderr)
+        exit(1)
     if args.list_calendar:
         listcal(args.list_calendar, aday=aday, no_download=no_download)
+        exit(0)
+    elif args.four_week:
+        fourweek(args.four_week, aday=aday, no_download=no_download)
         exit(0)
     agendamaker = Agenda(aday=aday, no_download=no_download, clear=args.clear)
     table = agendamaker.agenda_table()
