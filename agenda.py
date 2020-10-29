@@ -401,13 +401,14 @@ def listcal(calendars, aday=None, no_download=False):
 
 
 CORNERS = """\
-┌┬┐
-├┼┤
-└┴┘""".split('\n')
+┌┬┐▄
+├┼┤█
+└┴┘▀""".split('\n')
 DASH = "─"
 PIPE = "│"
+THICK = "█"
 
-def fourweek(calendars, aday=None, no_download=False):
+def fourweek(calendars, aday=None, no_download=False, zero_offset=False):
     termsize = os.get_terminal_size()
 
     table_width = 7
@@ -418,14 +419,27 @@ def fourweek(calendars, aday=None, no_download=False):
 
     table = []
 
-    def do_row(fill, left, mid=None, right=None):
+    todate = as_date(aday) or date.today()
+    today = datetime.combine(todate, time(0), tzlocal())
+    offset = today.isoweekday() % 7
+    rev_offset = 0
+    if zero_offset:
+        rev_offset = (7 - offset) % 7
+        offset = 0
+
+    def do_row(fill, left, mid=None, right=None, thick=None):
         if mid is None:
             mid = left
         if right is None:
             right = left
+        if thick is None:
+            thick = mid
         line = left
         for _ in range(table_width):
             line += fill * inner_width + mid
+        if rev_offset:
+            index = rev_offset * (inner_width + 1)
+            line = line[:index] + thick + line[index+1:]
         line = line[:-1] + right
         return line
 
@@ -434,13 +448,10 @@ def fourweek(calendars, aday=None, no_download=False):
     for _ in range(table_height):
         for _ in range(inner_height):
             table.append([])
-            #table.append(do_row(' ', PIPE))
         table.append(do_row(DASH, *CORNERS[1]))
     table.pop()
     table.append(do_row(DASH, *CORNERS[2]))
 
-    todate = as_date(aday) or date.today()
-    today = datetime.combine(todate, time(0), tzlocal())
     obj = load_evts(today, no_download=no_download)
 
     callist = []
@@ -457,8 +468,6 @@ def fourweek(calendars, aday=None, no_download=False):
         else:
             callist.append(calendar)
     _getCal(calendars)
-
-    offset = today.isoweekday() % 7
 
     cal2short = {}
     for cal in obj['calendars']:
@@ -523,8 +532,17 @@ def fourweek(calendars, aday=None, no_download=False):
 
     for line in table:
         if isinstance(line, list):
-            line = PIPE + PIPE.join(line) + PIPE
-        print(line)
+            text = ''
+            for i, segment in enumerate(line):
+                if rev_offset and rev_offset == i:
+                    text += THICK
+                else:
+                    text += PIPE
+                text += segment
+            text += PIPE
+            print(text)
+        else:
+            print(line)
 
 if __name__ == '__main__':
     import sys
@@ -536,6 +554,7 @@ if __name__ == '__main__':
     parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
     parser.add_argument('-l', '--list-calendar', metavar='CALENDAR', action='append', help='print a list of events from the specified calendar(s)')
     parser.add_argument('-x', '--four-week', metavar='CALENDAR', action='append', help='print a four-week diagram of the specified calendar(s)')
+    parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
     parser.add_argument('date', nargs='*', help='use this date instead of today')
     args = parser.parse_args()
     no_download = args.no_download and not args.force_download_check
@@ -555,7 +574,7 @@ if __name__ == '__main__':
         listcal(args.list_calendar, aday=aday, no_download=no_download)
         exit(0)
     elif args.four_week:
-        fourweek(args.four_week, aday=aday, no_download=no_download)
+        fourweek(args.four_week, aday=aday, no_download=no_download, zero_offset=args.zero_offset)
         exit(0)
     agendamaker = Agenda(aday=aday, no_download=no_download, clear=args.clear)
     table = agendamaker.agenda_table()
