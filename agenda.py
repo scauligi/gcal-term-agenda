@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import yaml
+import pickle
 
 from collections import Counter, OrderedDict
 from datetime import date, datetime, time, timedelta as t, timezone
@@ -95,6 +96,13 @@ class CurEvent:
     def __init__(self, evt, idx):
         self.evt = evt
         self.idx = idx
+        self.location = evt.location
+    def pop_location(self):
+        location = self.location
+        self.location = ''
+        if location:
+            location += '  '
+        return location
     def __eq__(self, o):
         if type(o) == type(self.evt):
             return o == self.evt
@@ -139,8 +147,8 @@ def download_evts(today):
         r = gcal.s().events().list(calendarId=calId,
                 singleEvents=True,
                 orderBy='startTime',
-                timeMin=(today - t(days=30)).isoformat(),
-                timeMax=(today + t(days=90)).isoformat()).execute()
+                timeMin=(today - t(days=10)).isoformat(),
+                timeMax=(today + t(days=30)).isoformat()).execute()
         for e in r['items']:
             ev = Event.unpkg(e)
             ev.calendar = calId
@@ -149,27 +157,31 @@ def download_evts(today):
     obj = {'events': evs, 'calendars': cals, 'timestamp': now}
     with open('evts.yaml', 'w') as f:
         yaml.dump(obj, f, default_flow_style=False)
+    with open('evts.pickle', 'wb') as f:
+        pickle.dump(obj, f)
     return obj
 
 def load_evts(today=None, no_download=False):
     now = datetime.now(tzlocal())
     today = datetime.combine(today or date.today(), time(0), tzlocal())
     try:
-        with open('evts.yaml') as f:
-            obj = yaml.full_load(f)
+        try:
+            with open('evts.pickle', 'rb') as f:
+                obj = pickle.load(f)
+        except FileNotFoundError:
+            with open('evts.yaml') as f:
+                obj = yaml.full_load(f)
             obj['timestamp'] = localize(obj['timestamp'])
+            for evt in obj['events']:
+                evt.start = localize(evt.start)
+                evt.end = localize(evt.end)
         if obj['timestamp'] > now:
             print(obj['timestamp'])
             exit(1)
         elif obj['timestamp'] + t(minutes=5) < now and not no_download:
             raise FileNotFoundError
-        else:
-            if obj['timestamp'] + t(minutes=5) < now:
-                print(fg(3) + 'Warning: timestamp is out of date by', tdtime(now - obj['timestamp']), RESET, file=sys.stderr)
-            evs = obj['events']
-            for evt in obj['events']:
-                evt.start = localize(evt.start)
-                evt.end = localize(evt.end)
+        elif obj['timestamp'] + t(minutes=6) < now:
+            print(fg(3) + 'Warning: timestamp is out of date by', tdtime(now - obj['timestamp']), RESET, file=sys.stderr)
     except FileNotFoundError:
         obj = download_evts(today)
     return obj
@@ -220,6 +232,7 @@ class Agenda:
             else:
                 self.curline += ' |  '
                 i += 1
+            self.curline += curevt.pop_location()
             self.curline += RESET
 
     def agenda_table(self):
@@ -237,6 +250,8 @@ class Agenda:
         self.timefield = ''
         self.curline = ''
         for evt in self.obj['events']:
+            if evt.cancelled:
+                continue
             start = as_date(evt.start)
             end = as_date(evt.end)
             if end < self.todate:
@@ -257,7 +272,7 @@ class Agenda:
             while self.tick < as_datetime(evt.start):
                 self._commit()
                 self._advance()
-            summary = evt.summary + ' ' + evt.location
+            summary = evt.summary
             summary = fg(self.cal2short[evt.calendar]) + summary
             if not self.timefield:
                 self.timefield = ftime(evt.start)
@@ -267,9 +282,13 @@ class Agenda:
                     summary += ' ({})'.format(ftime(evt.start).strip())
             if evt.end <= self.tock and evt.end != evt.start:
                 summary += ' (-> {})'.format(ftime(evt.end).strip())
-            summary += RESET
             if evt.end > self.now and evt.end > self.tock:
                 self.current_events.append(CurEvent(evt, blen(self.curline)))
+            elif evt.end > self.now:
+                summary += ' ' + evt.location
+            else:
+                pass
+            summary += RESET
             self.curline += summary
         while self.current_events:
             self._commit()
@@ -280,16 +299,31 @@ class Agenda:
 
 
     def print_table(self, table):
-        termsize = os.get_terminal_size()
-        fillout = termsize.columns if self.clear else 0
+        if self.clear:
+            termsize = os.get_terminal_size()
+            fillout = termsize.columns
+            linecount = 0
 
         lines = re.sub(r'\n{8,}', r'\n'*8, '\n'.join(line.rstrip() for line in table)).split('\n')
+        def pad(line):
+            n = blen(line)
+            over = n % fillout
+            if not over and n:
+                over = fillout
+            return fillout - over
         if self.clear:
-            lines = [line + ' ' * (fillout - blen(line)) for line in lines]
-            print('\033[H')
+            lines = [line + ' ' * pad(line) for line in lines]
+            for line in lines:
+                assert blen(line) % fillout == 0
+                if blen(line) > 0:
+                    assert blen(line) // fillout >= 1
+                else:
+                    print(repr(line))
+            linecount = sum(blen(line) // fillout for line in lines)
+            print('\033[H', end='')
         print('\n'.join(lines))
         if self.clear:
-            for i in range(len(lines), termsize.lines - 1):
+            for i in range(linecount, termsize.lines - 1):
                 print(' ' * termsize.columns)
 
 
@@ -338,6 +372,8 @@ def listcal(calendars, aday=None, no_download=False):
     seen = Counter()
     for evt in obj['events']:
         if evt.calendar not in callist:
+            continue
+        if evt.cancelled:
             continue
         start = as_datetime(evt.start)
         end = as_datetime(evt.end)

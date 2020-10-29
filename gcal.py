@@ -13,6 +13,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 import json
 from urllib.parse import urlparse, parse_qs
 import sys
+import re
 
 
 global code
@@ -108,6 +109,8 @@ class Event:
         self.recurrence = None
         self.uid = None
         self.recurring = False
+        self.cancelled = False
+        self._e = None
 
     def pkg(self, tzname):
         pkgd = {
@@ -123,8 +126,16 @@ class Event:
     @classmethod
     def unpkg(cls, e):
         evt = cls(e['summary'])
+        for person in e.get('attendees', []):
+            if person.get('self', False) and person['responseStatus'] == 'declined':
+                evt.cancelled = True
         if 'location' in e:
             evt.location = e['location']
+        elif 'hangoutLink' in e:
+            evt.location = e['hangoutLink']
+        elif 'description' in e:
+            if m := re.search(r'(https://[^\s<]*)', e['description']):
+                evt.location = m.group(1)
         if 'iCalUID' in e:
             evt.uid = e['iCalUID']
         if 'recurringEventId' in e:
@@ -132,6 +143,7 @@ class Event:
         evt.start = fromdateobj(e['start'])
         evt.end = fromdateobj(e['end'])
         # XXX recurrence?
+        evt._e = e
         return evt
 
 def singleDay(summary, d):
