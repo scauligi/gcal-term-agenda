@@ -189,9 +189,7 @@ def load_evts(today=None, no_download=False):
     return obj
 
 class Agenda:
-    def __init__(self, clear=False, aday=None, no_download=False):
-        self.clear = clear
-
+    def __init__(self, aday=None, no_download=False):
         self.now = datetime.now(tzlocal())
         self.todate = as_date(aday or date.today())
         self.today = datetime.combine(self.todate, time(0), tzlocal())
@@ -202,6 +200,8 @@ class Agenda:
         self.cal2short = {}
         for cal in self.obj['calendars']:
             self.cal2short[cal['id']] = rgb2short(cal['backgroundColor'])[0]
+
+        self.has_later = False
 
     def _commit(self):
         if self.now >= self.tick and self.now < self.tock:
@@ -289,6 +289,7 @@ class Agenda:
                 summary += ' (-> {})'.format(ftime(evt.end).strip())
             if evt.end > self.now and evt.end > self.tock:
                 self.current_events.append(CurEvent(evt, blen(self.curline)))
+                self.has_later = True
             elif evt.end > self.now:
                 summary += ' ' + evt.location
             else:
@@ -303,8 +304,8 @@ class Agenda:
         return self.table
 
 
-    def print_table(self, table):
-        if self.clear:
+    def print_table(self, table, clear=False):
+        if clear:
             termsize = os.get_terminal_size()
             fillout = termsize.columns
             linecount = 0
@@ -316,7 +317,7 @@ class Agenda:
             if not over and n:
                 over = fillout
             return fillout - over
-        if self.clear:
+        if clear:
             lines = [line + ' ' * pad(line) for line in lines]
             for line in lines:
                 assert blen(line) % fillout == 0
@@ -327,7 +328,7 @@ class Agenda:
             linecount = sum(blen(line) // fillout for line in lines)
             print('\033[H', end='')
         print('\n'.join(lines))
-        if self.clear:
+        if clear:
             for i in range(linecount, termsize.lines - 1):
                 print(' ' * termsize.columns)
 
@@ -578,6 +579,10 @@ if __name__ == '__main__':
     elif args.four_week:
         fourweek(args.four_week, aday=aday, no_download=no_download, zero_offset=args.zero_offset)
         exit(0)
-    agendamaker = Agenda(aday=aday, no_download=no_download, clear=args.clear)
+    agendamaker = Agenda(aday=aday, no_download=no_download)
     table = agendamaker.agenda_table()
-    agendamaker.print_table(table)
+    if not agendamaker.has_later and not aday:
+        aday = date.today() + t(days=1)
+        agendamaker = Agenda(aday=aday, no_download=True)
+        table += agendamaker.agenda_table()
+    agendamaker.print_table(table, args.clear)
