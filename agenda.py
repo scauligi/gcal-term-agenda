@@ -189,9 +189,9 @@ def load_evts(today=None, no_download=False):
     return obj
 
 class Agenda:
-    def __init__(self, aday=None, no_download=False):
+    def __init__(self, todate, no_download=False):
         self.now = datetime.now(tzlocal())
-        self.todate = as_date(aday or date.today())
+        self.todate = aday
         self.today = datetime.combine(self.todate, time(0), tzlocal())
         self.obj = load_evts(self.today, no_download=no_download)
 
@@ -333,8 +333,8 @@ class Agenda:
                 print(' ' * termsize.columns)
 
 
-def listcal(calendars, aday=None, no_download=False):
-    today = datetime.combine(aday or date.today(), time(0), tzlocal())
+def listcal(calendars, todate, no_download=False):
+    today = datetime.combine(todate, time(0), tzlocal())
     obj = load_evts(today, no_download=no_download)
 
     callist = []
@@ -411,7 +411,7 @@ DASH = "─"
 PIPE = "│"
 THICK = "█"
 
-def fourweek(calendars, aday=None, no_download=False, zero_offset=False):
+def fourweek(calendars, todate, no_download=False, zero_offset=False):
     termsize = os.get_terminal_size()
 
     table_width = 7
@@ -422,7 +422,6 @@ def fourweek(calendars, aday=None, no_download=False, zero_offset=False):
 
     table = []
 
-    todate = as_date(aday) or date.today()
     today = datetime.combine(todate, time(0), tzlocal())
     offset = today.isoweekday() % 7
     rev_offset = 0
@@ -565,24 +564,25 @@ if __name__ == '__main__':
         load_evts()
         print('loaded ok:', datetime.now())
         exit(0)
-    aday = None
     if args.date:
         import parsedatetime
         pdt = parsedatetime.Calendar()
-        aday = datetime(*pdt.parse(' '.join(args.date))[0][:6])
+        aday = datetime(*pdt.parse(' '.join(args.date))[0][:6]).date()
+    else:
+        aday = date.today()
     if args.list_calendar and args.four_week:
         print("error: cannot specify both -l and -x", file=sys.stderr)
         exit(1)
     if args.list_calendar:
-        listcal(args.list_calendar, aday=aday, no_download=no_download)
+        listcal(args.list_calendar, aday, no_download=no_download)
         exit(0)
     elif args.four_week:
-        fourweek(args.four_week, aday=aday, no_download=no_download, zero_offset=args.zero_offset)
+        fourweek(args.four_week, aday, no_download=no_download, zero_offset=args.zero_offset)
         exit(0)
-    agendamaker = Agenda(aday=aday, no_download=no_download)
+    agendamaker = Agenda(aday, no_download=no_download)
     table = agendamaker.agenda_table()
-    if not agendamaker.has_later and not aday:
+    if not agendamaker.has_later and not args.date:
         aday = date.today() + t(days=1)
-        agendamaker = Agenda(aday=aday, no_download=True)
+        agendamaker = Agenda(aday, no_download=True)
         table += agendamaker.agenda_table()
     agendamaker.print_table(table, args.clear)
