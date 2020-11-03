@@ -33,7 +33,7 @@ def blen(line):
 
 def dtime(dt=None):
     if not dt:
-        return '         '
+        return re.sub(r'.', ' ', date.today().strftime('%a %m/%d'))
     s = dt.strftime('%a %m/%d')
     s = re.sub(r'0(\d)/', r' \1/', s)
     s = re.sub(r'/0(\d)$', r'/\1 ', s)
@@ -42,7 +42,9 @@ def dtime(dt=None):
 def ftime(dt=None, now=False):
     if not dt:
         return '      '
-    s = re.sub(r'^0', ' ', dt.strftime('%I:%M%P')[:-1])
+    s = dt.strftime('%I:%M%P')
+    s = re.sub(r'm$', '', s)
+    s = re.sub(r'^0', ' ', s)
     if not now:
         s = re.sub(r':00([ap])', r'\1   ', s)
         if not dt.minute:
