@@ -163,7 +163,18 @@ def download_evts(today):
         pickle.dump(obj, f)
     return obj
 
-def load_evts(today=None, no_download=False):
+def string_outofdate(obj, now=None):
+    if not now:
+        now = datetime.now(tzlocal())
+    if obj['timestamp'] + t(minutes=6) < now:
+        return fg(3) + 'Warning: timestamp is out of date by ' + tdtime(now - obj['timestamp']) + RESET
+    return None
+
+def print_outofdate(obj):
+    if s := string_outofdate(obj):
+        print(s, file=sys.stderr)
+
+def load_evts(today=None, no_download=False, print_warning=True):
     now = datetime.now(tzlocal())
     today = datetime.combine(today or date.today(), time(0), tzlocal())
     try:
@@ -182,10 +193,10 @@ def load_evts(today=None, no_download=False):
             exit(1)
         elif obj['timestamp'] + t(minutes=5) < now and not no_download:
             raise FileNotFoundError
-        elif obj['timestamp'] + t(minutes=6) < now:
-            print(fg(3) + 'Warning: timestamp is out of date by', tdtime(now - obj['timestamp']), RESET, file=sys.stderr)
     except FileNotFoundError:
         obj = download_evts(today)
+    if print_warning:
+        print_outofdate(obj)
     return obj
 
 class Agenda:
@@ -193,7 +204,7 @@ class Agenda:
         self.now = datetime.now(tzlocal())
         self.todate = aday
         self.today = datetime.combine(self.todate, time(0), tzlocal())
-        self.obj = load_evts(self.today, no_download=no_download)
+        self.obj = load_evts(self.today, no_download=no_download, print_warning=False)
 
         self.interval = t(minutes=15)
 
@@ -300,6 +311,9 @@ class Agenda:
             self._commit()
             self._advance()
         self._commit()
+
+        if outofdate := string_outofdate(self.obj, self.now):
+            self.table.insert(0, outofdate)
 
         return self.table
 
@@ -582,6 +596,7 @@ if __name__ == '__main__':
     agendamaker = Agenda(aday, no_download=no_download)
     table = agendamaker.agenda_table()
     if not agendamaker.has_later and not args.date:
+        table.append(dtime() + ftime() + '     <-- ' + ftime(agendamaker.now, now=True))
         aday = date.today() + t(days=1)
         agendamaker = Agenda(aday, no_download=True)
         table += agendamaker.agenda_table()
