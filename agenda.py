@@ -493,7 +493,7 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
 
     def shorten(text):
         if len(text) > inner_width:
-            text = text[:inner_width-3] + '...'
+            text = text[:inner_width-1] + '⋯'
         return f'{text:<{inner_width}}'
 
     for evt in obj['events']:
