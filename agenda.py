@@ -197,20 +197,33 @@ def load_evts(today=None, no_download=False, print_warning=True):
         obj = download_evts(today)
     if print_warning:
         print_outofdate(obj)
-    return obj
+
+    cal2short = {}
+    cal2dark = {}
+    for cal in obj['calendars']:
+        code = cal['backgroundColor']
+        rgb = [int(code[x:x+2], 16) for x in (1, 3, 5)]
+        v = max(rgb)
+        new_v = max(v - 70, 0)
+        scaling = new_v / v
+        dark_code = ''.join(f'{round(x*scaling):02x}' for x in rgb)
+        cal2short[cal['id']] = rgb2short(code)[0]
+        cal2dark[cal['id']] = rgb2short(dark_code)[0]
+    def evt2short(evt, dark_recurring=False):
+        if dark_recurring and evt.recurring:
+            return cal2dark[evt.calendar]
+        return cal2short[evt.calendar]
+
+    return obj, evt2short
 
 class Agenda:
     def __init__(self, todate, no_download=False):
         self.now = datetime.now(tzlocal())
         self.todate = aday
         self.today = datetime.combine(self.todate, time(0), tzlocal())
-        self.obj = load_evts(self.today, no_download=no_download, print_warning=False)
+        self.obj, self.evt2short = load_evts(self.today, no_download=no_download, print_warning=False)
 
         self.interval = t(minutes=15)
-
-        self.cal2short = {}
-        for cal in self.obj['calendars']:
-            self.cal2short[cal['id']] = rgb2short(cal['backgroundColor'])[0]
 
         self.has_later = False
 
@@ -235,7 +248,7 @@ class Agenda:
             assert curevt.evt.end >= self.tick
             if blen(self.curline) < curevt.idx:
                 self.curline += ' ' * (curevt.idx - blen(self.curline))
-            self.curline += fg(self.cal2short[curevt.evt.calendar])
+            self.curline += fg(self.evt2short(curevt.evt))
             if curevt.evt.end == self.tock:
                 self.curline += '_|_ '
                 self.current_events.pop(i)
@@ -280,7 +293,7 @@ class Agenda:
                 if evt.end == self.todate:
                     continue
                 dateline = evt.summary
-                dateline = fg(self.cal2short[evt.calendar]) + dateline
+                dateline = fg(self.evt2short(evt)) + dateline
                 dateline += RESET
                 self.table.append(self.datefield + ' ' + ftime().replace(' ', '-') + '  ' + dateline)
                 self.datefield = dtime()
@@ -289,7 +302,7 @@ class Agenda:
                 self._commit()
                 self._advance()
             summary = evt.summary
-            summary = fg(self.cal2short[evt.calendar]) + summary
+            summary = fg(self.evt2short(evt)) + summary
             if not self.timefield:
                 self.timefield = ftime(evt.start)
             else:
@@ -349,7 +362,7 @@ class Agenda:
 
 def listcal(calendars, todate, no_download=False):
     today = datetime.combine(todate, time(0), tzlocal())
-    obj = load_evts(today, no_download=no_download)
+    obj, evt2short = load_evts(today, no_download=no_download)
 
     callist = []
     allCals = get_visible_cals(obj['calendars'])
@@ -385,10 +398,6 @@ def listcal(calendars, todate, no_download=False):
         (follmonth,                         '== THE FUTURE =='),
     ]
 
-    cal2short = {}
-    for cal in obj['calendars']:
-        cal2short[cal['id']] = rgb2short(cal['backgroundColor'])[0]
-
     seen = Counter()
     for evt in obj['events']:
         if evt.calendar not in callist:
@@ -411,7 +420,7 @@ def listcal(calendars, todate, no_download=False):
             fmt += ' '
             fmt += ftime(evt.start if isinstance(evt.start, datetime) else None)
             fmt += ' '
-            fmt += fg(cal2short[evt.calendar]) + evt.summary + RESET
+            fmt += fg(evt2short(evt)) + evt.summary + RESET
             fmt += ' '
             fmt += tdtime(evt.end - evt.start)
             print(fmt)
@@ -468,7 +477,7 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
     table.pop()
     table.append(do_row(DASH, *CORNERS[2]))
 
-    obj = load_evts(today, no_download=no_download)
+    obj, evt2short = load_evts(today, no_download=no_download)
 
     callist = []
     allCals = get_visible_cals(obj['calendars'])
@@ -484,10 +493,6 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
         else:
             callist.append(calendar)
     _getCal(calendars)
-
-    cal2short = {}
-    for cal in obj['calendars']:
-        cal2short[cal['id']] = rgb2short(cal['backgroundColor'])[0]
 
     cells = [list() for _ in range(table_width * table_height)]
 
@@ -511,7 +516,7 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
             else:
                 text = ' ' + evt.summary
             text = shorten(text)
-            text = fg(cal2short[evt.calendar]) + text + RESET
+            text = fg(evt2short(evt)) + text + RESET
             cells[cellnum].append(text)
         if not isinstance(evt.start, datetime) and (end - start).days > 1:
             for day in range(1, (evt.end - evt.start).days):
@@ -519,7 +524,7 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
                 if cellnum in range(0, len(cells)):
                     text = '> ' + evt.summary
                     text = shorten(text)
-                    text = fg(cal2short[evt.calendar]) + text + RESET
+                    text = fg(evt2short(evt)) + text + RESET
                     cells[cellnum].append(text)
 
     # overwrite table with content of cells
