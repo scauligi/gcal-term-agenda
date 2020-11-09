@@ -360,7 +360,7 @@ class Agenda:
                 print(' ' * termsize.columns)
 
 
-def listcal(calendars, todate, no_download=False):
+def listcal(calendars, todate, no_download=False, no_recurring=False):
     today = datetime.combine(todate, time(0), tzlocal())
     obj, evt2short = load_evts(today, no_download=no_download)
 
@@ -403,6 +403,8 @@ def listcal(calendars, todate, no_download=False):
         if evt.calendar not in callist:
             continue
         if evt.cancelled:
+            continue
+        if no_recurring and evt.recurring:
             continue
         start = as_datetime(evt.start)
         end = as_datetime(evt.end)
@@ -477,7 +479,9 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
     table.pop()
     table.append(do_row(DASH, *CORNERS[2]))
 
-    obj, evt2short = load_evts(today, no_download=no_download)
+    obj, _evt2short = load_evts(today, no_download=no_download)
+    def evt2short(evt):
+        return _evt2short(evt, dark_recurring=True)
 
     callist = []
     allCals = get_visible_cals(obj['calendars'])
@@ -494,7 +498,7 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
             callist.append(calendar)
     _getCal(calendars)
 
-    cells = [list() for _ in range(table_width * table_height)]
+    cells = [(list(), list()) for _ in range(table_width * table_height)]
 
     def shorten(text):
         if len(text) > inner_width:
@@ -517,7 +521,7 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
                 text = ' ' + evt.summary
             text = shorten(text)
             text = fg(evt2short(evt)) + text + RESET
-            cells[cellnum].append(text)
+            cells[cellnum][int(evt.recurring)].append(text)
         if not isinstance(evt.start, datetime) and (end - start).days > 1:
             for day in range(1, (evt.end - evt.start).days):
                 cellnum = (start.date() - todate).days + offset + day
@@ -525,14 +529,14 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
                     text = '> ' + evt.summary
                     text = shorten(text)
                     text = fg(evt2short(evt)) + text + RESET
-                    cells[cellnum].append(text)
+                    cells[cellnum][int(evt.recurring)].append(text)
 
     # overwrite table with content of cells
     for i in range(table_height):
         for j in range(table_width):
             for l in range(inner_height):
                 lineIndex = i * (inner_height + 1) + l + 1
-                cell = cells[i * table_width + j]
+                cell, cell_recurring = cells[i * table_width + j]
                 text = ' ' * inner_width
                 if l == 0:
                     datetext = dtime(todate + t(days=(i * table_width + j - offset)))
@@ -549,6 +553,14 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
                         text = '\033[34m' + text + RESET
                     elif l < len(cell):
                         text = cell[l]
+                    elif l >= len(cell):
+                        index = l - len(cell)
+                        if cell and index == 0:
+                            pass
+                        elif cell and (index - 1) < len(cell_recurring):
+                            text = cell_recurring[index - 1]
+                        elif index < len(cell_recurring):
+                            text = cell_recurring[index]
                 table[lineIndex].append(text)
 
     for line in table:
@@ -574,6 +586,7 @@ if __name__ == '__main__':
     parser.add_argument('-n', '--no-download', action='store_true', help="don't attempt to refresh the calendar cache")
     parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
     parser.add_argument('-l', '--list-calendar', metavar='CALENDAR', action='append', help='print a list of events from the specified calendar(s)')
+    parser.add_argument('-R', '--no-recurring', action='store_true', help='do not print recurring events in list')
     parser.add_argument('-x', '--four-week', metavar='CALENDAR', action='append', help='print a four-week diagram of the specified calendar(s)')
     parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
     parser.add_argument('date', nargs='*', help='use this date instead of today')
@@ -593,7 +606,7 @@ if __name__ == '__main__':
         print("error: cannot specify both -l and -x", file=sys.stderr)
         exit(1)
     if args.list_calendar:
-        listcal(args.list_calendar, aday, no_download=no_download)
+        listcal(args.list_calendar, aday, no_download=no_download, no_recurring=args.no_recurring)
         exit(0)
     elif args.four_week:
         fourweek(args.four_week, aday, no_download=no_download, zero_offset=args.zero_offset)
