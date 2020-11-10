@@ -534,9 +534,12 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
     # overwrite table with content of cells
     for i in range(table_height):
         for j in range(table_width):
+            cell, cell_recurring = cells[i * table_width + j]
+            if cell:
+                cell.append(' ' * inner_width)
+            cell.extend(cell_recurring)
             for l in range(inner_height):
                 lineIndex = i * (inner_height + 1) + l + 1
-                cell, cell_recurring = cells[i * table_width + j]
                 text = ' ' * inner_width
                 if l == 0:
                     datetext = dtime(todate + t(days=(i * table_width + j - offset)))
@@ -549,18 +552,9 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
                     l -= 2
                     if l + 2 == inner_height - 1 and len(cell) > l + 1:
                         text = shorten(format('... more ...', f'^{inner_width}'))
-                        # dark blue
-                        text = '\033[34m' + text + RESET
+                        text = fg(4) + text + RESET
                     elif l < len(cell):
                         text = cell[l]
-                    elif l >= len(cell):
-                        index = l - len(cell)
-                        if cell and index == 0:
-                            pass
-                        elif cell and (index - 1) < len(cell_recurring):
-                            text = cell_recurring[index - 1]
-                        elif index < len(cell_recurring):
-                            text = cell_recurring[index]
                 table[lineIndex].append(text)
 
     for line in table:
