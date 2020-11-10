@@ -3,5 +3,6 @@ __pycache__
 *.cred
 venv
 evts.yaml
+evts.pickle
 client_secret.json
 calendars.yaml
