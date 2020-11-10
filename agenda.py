@@ -331,33 +331,9 @@ class Agenda:
         return self.table
 
 
-    def print_table(self, table, clear=False):
-        if clear:
-            termsize = os.get_terminal_size()
-            fillout = termsize.columns
-            linecount = 0
-
+    def print_table(self, table):
         lines = re.sub(r'\n{8,}', r'\n'*8, '\n'.join(line.rstrip() for line in table)).split('\n')
-        def pad(line):
-            n = blen(line)
-            over = n % fillout
-            if not over and n:
-                over = fillout
-            return fillout - over
-        if clear:
-            lines = [line + ' ' * pad(line) for line in lines]
-            for line in lines:
-                assert blen(line) % fillout == 0
-                if blen(line) > 0:
-                    assert blen(line) // fillout >= 1
-                else:
-                    print(repr(line))
-            linecount = sum(blen(line) // fillout for line in lines)
-            print('\033[H', end='')
         print('\n'.join(lines))
-        if clear:
-            for i in range(linecount, termsize.lines - 1):
-                print(' ' * termsize.columns)
 
 
 def listcal(calendars, todate, no_download=False, no_recurring=False):
@@ -575,7 +551,6 @@ if __name__ == '__main__':
     import sys
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--clear', action='store_true', help='clear the screen before printing')
     parser.add_argument('-d', '--download-loop', action='store_true', help="don't print anything, just refresh the calendar cache")
     parser.add_argument('-n', '--no-download', action='store_true', help="don't attempt to refresh the calendar cache")
     parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
@@ -612,4 +587,4 @@ if __name__ == '__main__':
         aday = date.today() + t(days=1)
         agendamaker = Agenda(aday, no_download=True)
         table += agendamaker.agenda_table()
-    agendamaker.print_table(table, args.clear)
+    agendamaker.print_table(table)
