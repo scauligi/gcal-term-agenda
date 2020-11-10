@@ -38,6 +38,9 @@ def do(args):
         capture = subprocess.run(cmd, shell=True, capture_output=True)
         lines = capture.stdout.decode().replace('\r\n', '\n').split('\n')
         lines += capture.stderr.decode().replace('\r\n', '\n').split('\n')
+        while not lines[-1] or lines[-1].isspace():
+            lines.pop()
+        # TODO: decode tab spacing
         lines = [line + ' ' * pad(line) for line in lines]
         for line in lines:
             assert blen(line) % fillout == 0
