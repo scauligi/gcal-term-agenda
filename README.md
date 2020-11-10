@@ -50,32 +50,36 @@ Here is an example `calendars.yaml` file:
 
 ## Usage
 
-By default
-
 ```
-usage: agenda.py [-h] [--clear] [-d] [-n] [-f] [-l CALENDAR] [date [date ...]]
+usage: agenda.py [-h] [-d] [-n] [-f] [-l CALENDAR] [-R] [-x CALENDAR] [-0] [date [date ...]]
 
 positional arguments:
   date                  use this date instead of today
 
 optional arguments:
   -h, --help            show this help message and exit
-  --clear               clear the screen before printing
   -d, --download-loop   don't print anything, just refresh the calendar cache
   -n, --no-download     don't attempt to refresh the calendar cache
   -f, --force-download-check
                         overrides -n
   -l CALENDAR, --list-calendar CALENDAR
                         print a list of events from the specified calendar(s)
+  -R, --no-recurring    do not print recurring events in list
+  -x CALENDAR, --four-week CALENDAR
+                        print a four-week diagram of the specified calendar(s)
+  -0, --zero-offset     start the four-week diagram on the current day instead of Sunday
 ```
 
 Running `./agenda.py` on its own with no arguments will show events for the current day.
 If all events for the current day are over, it will show tomorrow's events as well.
 
-You can also view all upcoming events in a calendar in a list format via `agenda -l <calendar name>`.
+You can also view all upcoming events in a calendar in a list format via `-l <calendar name>`.
 The calendar name can be a full calendar ID or one of the short names in `calendars.yaml`. You can
 specify the `-l` option multiple times. As a special case, `-l all` will display all the calendars
 listed in `calendars.yaml`.
+
+Similarly, `-x <calendar name>` will show a four-week spread of the specified
+calendar(s). Like `-l`, you can specify `-x` multiple times or use `-x all`.
 
 ## Recommended setup
 
@@ -101,5 +105,19 @@ function agenda() {
 ```
 
 This allows me to call the agenda utility from anywhere using the command `agenda`.
+
+I use the included utility script `doublebuffer.py` as a replacement for
+`watch` when I want a live-updating agenda view, since `watch` doesn't support
+256-color codes.
+
+Examples:
+
+```bash
+./doublebuffer.py -i agenda
+```
+
+```bash
+./doublebuffer.py -n 30 -t -i "agenda -x all"
+```
 
 
