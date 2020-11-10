@@ -461,7 +461,9 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
     obj, _evt2short = load_evts(today, no_download=no_download)
     now = datetime.now(tzlocal())
     def evt2short(evt):
-        if as_date(evt.start) == todate:
+        if as_date(evt.start) < todate:
+            dark = True
+        elif as_date(evt.start) == todate:
             dark = isinstance(evt.end, datetime) and evt.end <= now
         else:
             dark = evt.recurring
