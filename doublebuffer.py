@@ -6,6 +6,10 @@ import re
 import subprocess
 import time
 
+HIDE_CURSOR = '\033[?25l'
+SHOW_CURSOR = '\033[?25h'
+CLEAR_TERM = '\033[H'
+
 def blen(line):
     return len(re.sub('\033.*?m', '', line))
 
@@ -32,7 +36,7 @@ def do(cmd, seconds):
             else:
                 print(repr(line))
         linecount = sum(blen(line) // fillout for line in lines)
-        print('\033[H', end='')
+        print(CLEAR_TERM, end='')
         print('\n'.join(lines))
         for i in range(linecount, termsize.lines - 1):
             print(' ' * termsize.columns)
@@ -43,4 +47,8 @@ if __name__ == '__main__':
     parser.add_argument('-n', '--interval', metavar='seconds', action='store', type=int, default=5, help='seconds to wait between updates')
     parser.add_argument('command')
     args = parser.parse_args()
-    do(args.command, seconds=args.interval)
+    print(HIDE_CURSOR, end='')
+    try:
+        do(args.command, seconds=args.interval)
+    finally:
+        print(SHOW_CURSOR, end='', flush=True)
