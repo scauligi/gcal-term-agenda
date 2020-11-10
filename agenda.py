@@ -209,8 +209,8 @@ def load_evts(today=None, no_download=False, print_warning=True):
         dark_code = ''.join(f'{round(x*scaling):02x}' for x in rgb)
         cal2short[cal['id']] = rgb2short(code)[0]
         cal2dark[cal['id']] = rgb2short(dark_code)[0]
-    def evt2short(evt, dark_recurring=False):
-        if dark_recurring and evt.recurring:
+    def evt2short(evt, dark=False):
+        if dark:
             return cal2dark[evt.calendar]
         return cal2short[evt.calendar]
 
@@ -301,8 +301,8 @@ class Agenda:
             while self.tick < as_datetime(evt.start):
                 self._commit()
                 self._advance()
-            summary = evt.summary
-            summary = fg(self.evt2short(evt)) + summary
+            dark = False
+            summary = ''
             if not self.timefield:
                 self.timefield = ftime(evt.start)
             else:
@@ -317,8 +317,8 @@ class Agenda:
             elif evt.end > self.now:
                 summary += ' ' + evt.location
             else:
-                pass
-            summary += RESET
+                dark = True
+            summary = fg(self.evt2short(evt, dark=dark)) + evt.summary + summary + RESET
             self.curline += summary
         while self.current_events:
             self._commit()
@@ -338,6 +338,7 @@ class Agenda:
 
 def listcal(calendars, todate, no_download=False, no_recurring=False):
     today = datetime.combine(todate, time(0), tzlocal())
+    now = datetime.now(tzlocal())
     obj, evt2short = load_evts(today, no_download=no_download)
 
     callist = []
@@ -393,14 +394,16 @@ def listcal(calendars, todate, no_download=False, no_recurring=False):
                 _, s = highwater.pop(0)
             if s:
                 print(fg(4) + s + RESET)
+            dark = isinstance(evt.end, datetime) and evt.end < now
+            white = fg(8) if dark else ''
             fmt = '  '
-            fmt += dtime(evt.start)
+            fmt += white + dtime(evt.start) + RESET
             fmt += ' '
-            fmt += ftime(evt.start if isinstance(evt.start, datetime) else None)
+            fmt += white + ftime(evt.start if isinstance(evt.start, datetime) else None)
             fmt += ' '
-            fmt += fg(evt2short(evt)) + evt.summary + RESET
+            fmt += fg(evt2short(evt, dark=dark)) + evt.summary + RESET
             fmt += ' '
-            fmt += tdtime(evt.end - evt.start)
+            fmt += white + tdtime(evt.end - evt.start) + RESET
             print(fmt)
 
 
@@ -456,8 +459,18 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
     table.append(do_row(DASH, *CORNERS[2]))
 
     obj, _evt2short = load_evts(today, no_download=no_download)
+    now = datetime.now(tzlocal())
     def evt2short(evt):
-        return _evt2short(evt, dark_recurring=True)
+        if as_date(evt.start) == todate:
+            dark = isinstance(evt.end, datetime) and evt.end <= now
+        else:
+            dark = evt.recurring
+        return _evt2short(evt, dark=dark)
+    def choice(evt):
+        if as_date(evt.start) == todate:
+            return isinstance(evt.end, datetime) and evt.end > now
+        else:
+            return evt.recurring
 
     callist = []
     allCals = get_visible_cals(obj['calendars'])
@@ -497,7 +510,7 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
                 text = ' ' + evt.summary
             text = shorten(text)
             text = fg(evt2short(evt)) + text + RESET
-            cells[cellnum][int(evt.recurring)].append(text)
+            cells[cellnum][choice(evt)].append(text)
         if not isinstance(evt.start, datetime) and (end - start).days > 1:
             for day in range(1, (evt.end - evt.start).days):
                 cellnum = (start.date() - todate).days + offset + day
@@ -505,7 +518,7 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
                     text = '> ' + evt.summary
                     text = shorten(text)
                     text = fg(evt2short(evt)) + text + RESET
-                    cells[cellnum][int(evt.recurring)].append(text)
+                    cells[cellnum][choice(evt)].append(text)
 
     # overwrite table with content of cells
     for i in range(table_height):
