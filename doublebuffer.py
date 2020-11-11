@@ -9,9 +9,44 @@ import time
 HIDE_CURSOR = '\033[?25l'
 SHOW_CURSOR = '\033[?25h'
 CLEAR_TERM = '\033[H'
+RESET = '\033[0m'
 
-def blen(line):
-    return len(re.sub('\033.*?m', '', line))
+def tokenize(line):
+    chars = list(line)
+    tokens = []
+    while chars:
+        c = chars.pop(0)
+        if c == '\033':
+            token = c
+            while chars and c != 'm':
+                c = chars.pop(0)
+                token += c
+            tokens.append(token)
+        else:
+            tokens.append(c)
+    return tokens
+
+def linesplit(oldtokenlines, columns):
+    # TODO: decode tab spacing
+    counter = 0
+    tokenlines = []
+    lastcode = RESET
+    for tokens in oldtokenlines:
+        counter = 0
+        tokenlines.append([])
+        for token in tokens:
+            if token.startswith('\033'):
+                tokenlines[-1].append(token)
+                lastcode = token
+            else:
+                if counter == columns:
+                    counter = 0
+                    tokenlines.append([])
+                counter += 1
+                tokenlines[-1].append(token)
+        tokenlines[-1].append(' ' * (columns - counter))
+    tokenlines = [''.join(tokens) for tokens in tokenlines]
+    return tokenlines
 
 def quote(s):
     s = s.replace('\\', '\\\\')
@@ -25,34 +60,28 @@ def do(args):
     if args.pseudo_terminal:
         cmd = f'script -qec "{quote(cmd)}" /dev/null'
     while True:
-        termsize = os.get_terminal_size()
-        fillout = termsize.columns
-        def pad(line):
-            n = blen(line)
-            over = n % fillout
-            if not over and n:
-                over = fillout
-            return fillout - over
-        linecount = 0
-
         capture = subprocess.run(cmd, shell=True, capture_output=True)
         lines = capture.stdout.decode().replace('\r\n', '\n').split('\n')
         lines += capture.stderr.decode().replace('\r\n', '\n').split('\n')
         while not lines[-1] or lines[-1].isspace():
             lines.pop()
-        # TODO: decode tab spacing
-        lines = [line + ' ' * pad(line) for line in lines]
-        for line in lines:
-            assert blen(line) % fillout == 0
-            if blen(line) > 0:
-                assert blen(line) // fillout >= 1
-            else:
-                print(repr(line))
-        linecount = sum(blen(line) // fillout for line in lines)
+
+        termsize = os.get_terminal_size()
+        tokenlines = [tokenize(line) for line in lines]
+        lines = linesplit(tokenlines, termsize.columns)
+
+        more = len(lines) > termsize.lines
+        if more:
+            lines = lines[:termsize.lines-1]
+            text = format('... more ...', f'^{termsize.columns}')[:termsize.columns]
+            # dark blue
+            text = '\033[38;5;24m' + text + RESET
+            lines.append(text)
+
         print(CLEAR_TERM, end='')
-        print('\n'.join(lines))
-        for i in range(linecount, termsize.lines - 1):
-            print(' ' * termsize.columns)
+        print('\n'.join(lines), end=RESET)
+        for i in range(len(lines), termsize.lines):
+            print('\n' + ' ' * termsize.columns, end=RESET)
         time.sleep(args.interval)
 
 if __name__ == '__main__':
