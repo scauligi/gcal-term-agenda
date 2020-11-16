@@ -470,7 +470,7 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
         return _evt2short(evt, dark=dark)
     def choice(evt):
         if as_date(evt.start) == todate:
-            return isinstance(evt.end, datetime) and evt.end > now
+            return isinstance(evt.end, datetime) and evt.start >= now
         else:
             return evt.recurring
 
