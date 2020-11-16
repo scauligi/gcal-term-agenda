@@ -72,10 +72,37 @@ def do(args):
 
         more = len(lines) > termsize.lines
         if more:
-            lines = lines[:termsize.lines-1]
-            text = format('... more ...', f'^{termsize.columns}')[:termsize.columns]
+            lastline = tokenize(lines[termsize.lines - 1])
+            lines = lines[:termsize.lines - 1]
+            moretext = format('...XmoreX...', f'^{termsize.columns}')[:termsize.columns]
+            start = 0
+            while moretext[start].isspace():
+                start += 1
+            end = len(moretext) - 1
+            while moretext[end-1].isspace():
+                end -= 1
+            moretext = moretext.replace('X', ' ')
+            i = 0
+            text = ''
+            lastcode = RESET
+            while i < start:
+                token = lastline.pop(0)
+                text += token
+                if token.startswith('\033'):
+                    lastcode = token
+                else:
+                    i += 1
             # dark blue
-            text = '\033[38;5;24m' + text + RESET
+            text += '\033[38;5;24m'
+            while i < end:
+                text += moretext[i]
+                i += 1
+                token = lastline.pop(0)
+                while token.startswith('\033'):
+                    lastcode = token
+                    token = lastline.pop(0)
+            text += lastcode
+            text += ''.join(lastline)
             lines.append(text)
 
         print(CLEAR_TERM, end='')
