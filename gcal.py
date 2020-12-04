@@ -134,7 +134,7 @@ class Event:
         elif 'hangoutLink' in e:
             evt.location = e['hangoutLink']
         elif 'description' in e:
-            if m := re.search(r'(https://[^\s<]*)', e['description']):
+            if m := re.search(r'(https://[^\s<>"]*)', e['description']):
                 evt.location = m.group(1)
         if 'iCalUID' in e:
             evt.uid = e['iCalUID']
