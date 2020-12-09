@@ -350,9 +350,9 @@ class Agenda:
                 tickt = time(minutes // 60, minutes % 60)
                 tick = datetime.combine(self.todate, tickt, tzinfo=self.today.tzinfo)
                 if not (timefield := self.table[0][tickt]):
-                    if not did_first:
-                        continue
                     if tick < nowtick and not self.table[1][tickt]:
+                        continue
+                    if not did_first and tick != nowtick:
                         continue
                     timefield = ftime()
                 row = self.table[1][tickt]
