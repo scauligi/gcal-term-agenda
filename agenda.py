@@ -6,7 +6,7 @@ import sys
 import yaml
 import pickle
 
-from collections import Counter, OrderedDict
+from collections import Counter, OrderedDict, defaultdict as ddict
 from datetime import date, datetime, time, timedelta as t, timezone
 from dateutil.tz import tzlocal
 
@@ -102,24 +102,6 @@ def localize(dt):
     elif isinstance(dt, date):
         return dt
     return dt
-
-class CurEvent:
-    def __init__(self, evt, idx):
-        self.evt = evt
-        self.idx = idx
-        self.location = evt.location
-    def pop_location(self):
-        location = self.location
-        self.location = ''
-        if location:
-            location += '  '
-        return location
-    def __eq__(self, o):
-        if type(o) == type(self.evt):
-            return o == self.evt
-        if not isinstance(o, CurEvent):
-            return False
-        return o.evt == self.evt
 
 def get_visible_cals(cals):
     try:
@@ -247,7 +229,7 @@ def load_evts(today=None, no_download=False, print_warning=True):
 class Agenda:
     def __init__(self, todate, calendars, no_download=False):
         self.now = datetime.now(tzlocal())
-        self.todate = aday
+        self.todate = todate
         self.today = datetime.combine(self.todate, time(0), tzlocal())
         self.obj, self.evt2short = load_evts(self.today, no_download=no_download, print_warning=False)
         self.callist = filter_calendars(self.obj, calendars)
@@ -256,54 +238,20 @@ class Agenda:
 
         self.has_later = False
 
-    def _commit(self):
-        if self.now >= self.tick and self.now < self.tock:
-            self.curline += '  <-- ' + ftime(self.now, now=True)
-        if self.curline or (self.did_first and self.tick > self.now):
-            if not self.timefield:
-                self.timefield = ftime()
-            self.table.append(self.datefield + ' ' + self.timefield + '  ' + self.curline)
-            self.datefield = dtime()
-            self.timefield = ''
-            self.curline = ''
-            self.did_first = True
+    def agenda_table(self, ndays=None):
+        def quantize(thetime):
+            return datetime(thetime.year, thetime.month, thetime.day, thetime.hour, thetime.minute // 15 * 15, tzinfo=thetime.tzinfo)
 
-    def _advance(self):
-        self.tick += self.interval
-        self.tock = self.tick + self.interval
-        i = 0
-        while i < len(self.current_events):
-            curevt = self.current_events[i]
-            assert curevt.evt.end >= self.tick
-            if blen(self.curline) < curevt.idx:
-                self.curline += ' ' * (curevt.idx - blen(self.curline))
-            self.curline += fg(self.evt2short(curevt.evt))
-            if curevt.evt.end == self.tock:
-                self.curline += '_|_ '
-                self.current_events.pop(i)
-            elif curevt.evt.end < self.tock:
-                self.curline += '-+- ({}) '.format(ftime(curevt.evt.end).strip())
-                self.current_events.pop(i)
-            else:
-                self.curline += ' |  '
-                i += 1
-            self.curline += curevt.pop_location()
-            self.curline += RESET
-
-    def agenda_table(self):
-        self.tick = self.today
-        self.tock = self.tick + self.interval
-
+        actual_ndays = ndays or 1
         self.table = []
-        self.current_events = []
+        for _ in range(actual_ndays + 1):
+            bigcol = ddict(str)
+            bigcol[None] = []
+            self.table.append(bigcol)
 
-        enddate = self.todate + t(days=1)
+        enddate = self.todate + t(days=actual_ndays)
 
-        last_date = None
-        self.did_first = False
-        self.datefield = ''
-        self.timefield = ''
-        self.curline = ''
+        presort = []
         for evt in self.obj['events']:
             if evt.calendar not in self.callist:
                 continue
@@ -311,54 +259,104 @@ class Agenda:
                 continue
             start = as_date(evt.start)
             end = as_date(evt.end)
+            if not isinstance(evt.end, datetime) and evt.end == self.todate:
+                continue
             if end < self.todate:
                 continue
             elif start >= enddate:
                 break
-            day = as_date(evt.start)
-            if day != last_date:
-                self.datefield = dtime(day)
-                last_date = day
+            presort.append(evt)
+        zero_time = time()
+        def _presort_key(evt):
+            if isinstance(evt.start, datetime):
+                return ((1, evt.start.time()), evt.start.date())
+            return ((0, zero_time), evt.start)
+        presort.sort(key=_presort_key)
+
+        self.did_first = False
+        self.timefield = ''
+        for evt in presort:
+            index = (as_date(evt.start) - self.todate).days + 1
             if not isinstance(evt.start, datetime):
-                # kludgy bugfix
-                if evt.end == self.todate:
-                    continue
                 dateline = evt.summary
                 dateline = fg(self.evt2short(evt)) + dateline
                 dateline += RESET
-                self.table.append(self.datefield + ' ' + ftime().replace(' ', '-') + '  ' + dateline)
-                self.datefield = dtime()
+                length = (evt.end - evt.start).days
+                for i in range(index, index + length):
+                    self.table[i][None].append(dateline)
                 continue
-            while self.tick < as_datetime(evt.start):
-                self._commit()
-                self._advance()
             dark = False
-            summary = ''
-            if not self.timefield:
-                self.timefield = ftime(evt.start)
-            else:
-                self.curline += '   '
-                if ftime(evt.start) != self.timefield:
-                    summary += ' ({})'.format(ftime(evt.start).strip())
-            if evt.end <= self.tock and evt.end != evt.start:
-                summary += ' (-> {})'.format(ftime(evt.end).strip())
-            if evt.end > self.now and evt.end > self.tock:
-                self.current_events.append(CurEvent(evt, blen(self.curline)))
+            endtime = ''
+            tick = quantize(evt.start)
+            tock = tick + self.interval
+            if not self.table[0][tick.time()]:
+                self.table[0][tick.time()] = ftime(tick)
+            # if self.table[index][tick.time()]:
+            #     self.table[index][tick.time()] += '   '
+            if evt.start != tick:
+                endtime = ' ({})'.format(ftime(evt.start).strip())
+            if evt.end <= tock and evt.end != evt.start:
+                endtime += ' (-> {})'.format(ftime(evt.end).strip())
+            if evt.end > self.now and evt.end > tock:
                 self.has_later = True
-            elif evt.end > self.now:
-                summary += ' ' + evt.location
-            else:
+                initial = blen(self.table[index][tick.time()])
+                while evt.end > tock:
+                    tick = tock
+                    tock = tick + self.interval
+                    if (length := blen(self.table[index][tick.time()])) < initial:
+                        self.table[index][tick.time()] += ' ' * (initial - length)
+                    self.table[index][tick.time()] += fg(self.evt2short(evt))
+                    if evt.end == tock:
+                        self.table[index][tick.time()] += '_|_ '
+                    elif evt.end < tock:
+                        self.table[index][tick.time()] += '-+- ({}) '.format(ftime(evt.end).strip())
+                    else:
+                        self.table[index][tick.time()] += ' |  '
+                    if tick == quantize(evt.start) + self.interval and evt.location:
+                        self.table[index][tick.time()] += evt.location + '  '
+                    self.table[index][tick.time()] += RESET
+                tick = quantize(evt.start)
+                tock = tick + self.interval
+            elif evt.end > self.now:  # and evt.end <= tock
+                endtime = ' ' + evt.location + endtime
+            else:  # evt.end <= self.now
                 dark = True
-            summary = fg(self.evt2short(evt, dark=dark)) + evt.summary + summary + RESET
-            self.curline += summary
-        while self.current_events:
-            self._commit()
-            self._advance()
-        self._commit()
+            summary = fg(self.evt2short(evt, dark=dark)) + evt.summary + endtime + RESET + '   '
+            self.table[index][tick.time()] += summary
 
         if outofdate := string_outofdate(self.obj, self.now):
-            self.table.insert(0, outofdate)
+            self.table[0][None].append(outofdate)
 
+        if ndays is None:
+            newtable = []
+            nowtick = quantize(self.now)
+            if self.now.date() == self.todate:
+                self.table[1][nowtick.time()] += '  <-- ' + ftime(self.now, now=True)
+            if self.table[0][None]:
+                newtable.extend(self.table[0][None])
+            datefield = dtime(self.todate)
+            timefield = ftime().replace(' ', '-')
+            for row in self.table[1][None]:
+                newtable.append(f'{datefield} {timefield}  {row}')
+                datefield = dtime()
+            did_first = False
+            for minutes in range(0, 24 * 60, self.interval.seconds // 60):
+                tickt = time(minutes // 60, minutes % 60)
+                tick = datetime.combine(self.todate, tickt, tzinfo=self.today.tzinfo)
+                if not (timefield := self.table[0][tickt]):
+                    if not did_first:
+                        continue
+                    if tick < nowtick and not self.table[1][tickt]:
+                        continue
+                    timefield = ftime()
+                row = self.table[1][tickt]
+                newtable.append(f'{datefield} {timefield}  {row}'.rstrip())
+                datefield = dtime()
+                did_first = True
+            while not (lastline := newtable.pop()):
+                pass
+            newtable.append(lastline)
+            return newtable
         return self.table
 
 
@@ -374,7 +372,7 @@ def listcal(todate, calendars, no_download=False, no_recurring=False):
 
     callist = filter_calendars(obj, calendars)
 
-    weekday = today.isoweekday() % 7
+    weekday = todate.isoweekday() % 7
     nextsunday = 7 - weekday
     nextmonth = date(today.year + today.month // 12, today.month % 12 + 1, 1)
     nextmonth = datetime.combine(nextmonth, time(0), tzlocal())
@@ -445,7 +443,7 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
     table = []
 
     today = datetime.combine(todate, time(0), tzlocal())
-    offset = today.isoweekday() % 7
+    offset = todate.isoweekday() % 7
     rev_offset = 0
     if zero_offset:
         rev_offset = (7 - offset) % 7
@@ -567,7 +565,22 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
         else:
             print(line)
 
-if __name__ == '__main__':
+def weekview(todate, ndays, calendars, no_download=False, zero_offset=False):
+    from doublebuffer import tokenize, linesplit
+    termsize = os.get_terminal_size()
+    table_width = ndays if ndays > 0 else 7
+    inner_width = termsize.columns // table_width
+    offset = todate.isoweekday() % 7
+    rev_offset = 0
+    if zero_offset:
+        rev_offset = (7 - offset) % 7
+        offset = 0
+    agendamaker = Agenda(todate, calendars, no_download=False)
+    table = agendamaker.agenda_table(ndays=table_width)
+    table = [''.join(rows) for rows in table]
+    print('\n'.join(table))
+
+def main():
     import sys
     import argparse
     parser = argparse.ArgumentParser()
@@ -580,6 +593,7 @@ if __name__ == '__main__':
     parser.add_argument('-R', '--no-recurring', action='store_true', help='do not print recurring events in list')
     parser.add_argument('-x', '--four-week', action='store_true', help='print a four-week diagram')
     parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
+    parser.add_argument('-w', '--week-view', metavar='N', nargs='?', const=0, type=int, help='print a multi-day view (of N days)')
     parser.add_argument('date', nargs='*', help='use this date instead of today')
     args = parser.parse_args()
     no_download = args.no_download and not args.force_download_check
@@ -593,8 +607,12 @@ if __name__ == '__main__':
         aday = datetime(*pdt.parse(' '.join(args.date))[0][:6]).date()
     else:
         aday = date.today()
-    if args.list_calendar and args.four_week:
-        print("error: cannot specify both -l and -x", file=sys.stderr)
+    modes = 0
+    modes += args.list_calendar
+    modes += args.four_week
+    modes += args.week_view is not None
+    if modes > 1:
+        print("error: cannot specify more than one major mode", file=sys.stderr)
         exit(1)
     if args.list_calendar:
         listcal(aday, args.calendar, no_download=no_download, no_recurring=args.no_recurring)
@@ -602,11 +620,16 @@ if __name__ == '__main__':
     elif args.four_week:
         fourweek(aday, args.calendar, no_download=no_download, zero_offset=args.zero_offset)
         exit(0)
+    elif args.week_view is not None:
+        weekview(aday, args.week_view, args.calendar, no_download=no_download, zero_offset=args.zero_offset)
+        exit(0)
     agendamaker = Agenda(aday, args.calendar, no_download=no_download)
     table = agendamaker.agenda_table()
     if not agendamaker.has_later and not args.date:
-        table.append(dtime() + ftime() + '     <-- ' + ftime(agendamaker.now, now=True))
         aday = date.today() + t(days=1)
         agendamaker = Agenda(aday, args.calendar, no_download=True)
         table += agendamaker.agenda_table()
     agendamaker.print_table(table)
+
+if __name__ == '__main__':
+    main()
