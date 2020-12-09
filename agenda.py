@@ -573,12 +573,14 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
         else:
             print(line)
 
-def weekview(todate, ndays, calendars, no_download=False, zero_offset=False, interval=15):
+def weekview(todate, ndays, calendars, no_download=False, zero_offset=False, interval=15, inner_width=None):
     from doublebuffer import tokenize
-    termsize = os.get_terminal_size()
     table_width = ndays if ndays > 0 else 7
     timecol = len(ftime() + '  ')
-    inner_width = (termsize.columns - timecol) // table_width
+    termsize = None
+    if inner_width is None:
+        termsize = os.get_terminal_size()
+        inner_width = (termsize.columns - timecol) // table_width
     def overlay(rows):
         def pop(tokens):
             if tokens:
@@ -629,10 +631,11 @@ def weekview(todate, ndays, calendars, no_download=False, zero_offset=False, int
                 tok = ' '
             line.append(tok)
             counter += 1
-            if counter == termsize.columns - timecol:
-                if line[-1][-1] not in (' ', '\0'):
-                    line[-1] = line[-1][:-1] + '⋯'
-                break
+            if termsize is not None:
+                if counter == termsize.columns - timecol:
+                    if line[-1][-1] not in (' ', '\0'):
+                        line[-1] = line[-1][:-1] + '⋯'
+                    break
         return ''.join(line)
     offset = 0
     if ndays == 0:
@@ -691,6 +694,7 @@ def main():
     parser.add_argument('-x', '--four-week', action='store_true', help='print a four-week diagram')
     parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
     parser.add_argument('-w', '--week-view', metavar='N', nargs='?', const=0, type=int, help='print a multi-day view (of N days)')
+    parser.add_argument('-m', '--inner-width', metavar='N', type=int, help='inner width for week view')
     parser.add_argument('date', nargs='*', help='use this date instead of today')
     args = parser.parse_args()
     no_download = args.no_download and not args.force_download_check
@@ -718,7 +722,7 @@ def main():
         fourweek(aday, args.calendar, no_download=no_download, zero_offset=args.zero_offset)
         exit(0)
     elif args.week_view is not None:
-        weekview(aday, args.week_view, args.calendar, no_download=no_download, zero_offset=args.zero_offset, interval=args.interval)
+        weekview(aday, args.week_view, args.calendar, no_download=no_download, zero_offset=args.zero_offset, interval=args.interval, inner_width=args.inner_width)
         exit(0)
     agendamaker = Agenda(aday, args.calendar, no_download=no_download, interval=args.interval)
     table = agendamaker.agenda_table()
