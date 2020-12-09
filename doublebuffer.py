@@ -30,14 +30,12 @@ def linesplit(oldtokenlines, columns):
     # TODO: decode tab spacing
     counter = 0
     tokenlines = []
-    lastcode = RESET
     for tokens in oldtokenlines:
         counter = 0
         tokenlines.append([])
         for token in tokens:
             if token.startswith('\033'):
                 tokenlines[-1].append(token)
-                lastcode = token
             else:
                 if counter == columns:
                     counter = 0
