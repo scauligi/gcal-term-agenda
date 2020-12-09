@@ -228,20 +228,22 @@ def load_evts(today=None, no_download=False, print_warning=True):
     return obj, evt2short
 
 class Agenda:
-    def __init__(self, todate, calendars, no_download=False):
+    def __init__(self, todate, calendars, no_download=False, interval=15):
         self.now = datetime.now(tzlocal())
         self.todate = todate
         self.today = datetime.combine(self.todate, time(0), tzlocal())
         self.obj, self.evt2short = load_evts(self.today, no_download=no_download, print_warning=False)
         self.callist = filter_calendars(self.obj, calendars)
 
-        self.interval = t(minutes=15)
+        self.interval = t(minutes=interval)
 
         self.has_later = False
 
     def agenda_table(self, ndays=None):
         def quantize(thetime):
-            return datetime(thetime.year, thetime.month, thetime.day, thetime.hour, thetime.minute // 15 * 15, tzinfo=thetime.tzinfo)
+            minutes = self.interval.seconds // 60
+            theminutes = (thetime.hour * 60 + thetime.minute) // minutes * minutes
+            return datetime(thetime.year, thetime.month, thetime.day, theminutes // 60, theminutes % 60, tzinfo=thetime.tzinfo)
 
         actual_ndays = ndays or 1
         self.table = []
@@ -296,7 +298,9 @@ class Agenda:
             #     self.table[index][tick.time()] += '   '
             if evt.start != tick:
                 endtime = ' ({})'.format(ftime(evt.start).strip())
-            if evt.end <= tock and evt.end != evt.start:
+            if evt.end == evt.start:
+                endtime += ' <-'
+            elif evt.end < tock:
                 endtime += ' (-> {})'.format(ftime(evt.end).strip())
             skip = ndays is None and evt.end <= self.now
             if evt.end <= self.now:
@@ -569,7 +573,7 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
         else:
             print(line)
 
-def weekview(todate, ndays, calendars, no_download=False, zero_offset=False):
+def weekview(todate, ndays, calendars, no_download=False, zero_offset=False, interval=15):
     from doublebuffer import tokenize
     termsize = os.get_terminal_size()
     table_width = ndays if ndays > 0 else 7
@@ -636,7 +640,7 @@ def weekview(todate, ndays, calendars, no_download=False, zero_offset=False):
         if zero_offset:
             offset = (offset - 1) % 7
     start = todate - t(days=offset)
-    agendamaker = Agenda(start, calendars, no_download=no_download)
+    agendamaker = Agenda(start, calendars, no_download=no_download, interval=interval)
     table = agendamaker.agenda_table(ndays=table_width)
     newtable = []
     timefield = ftime()
@@ -681,6 +685,7 @@ def main():
     parser.add_argument('-n', '--no-download', action='store_true', help="don't attempt to refresh the calendar cache")
     parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
     parser.add_argument('-c', '--calendar', metavar='CALENDAR', action='append', help='restrict to specified calendar(s)')
+    parser.add_argument('-i', '--interval', metavar='MINUTES', action='store', type=int, default=15, help='interval for default/week view')
     parser.add_argument('-l', '--list-calendar', action='store_true', help='print a list of events')
     parser.add_argument('-R', '--no-recurring', action='store_true', help='do not print recurring events in list')
     parser.add_argument('-x', '--four-week', action='store_true', help='print a four-week diagram')
@@ -713,13 +718,13 @@ def main():
         fourweek(aday, args.calendar, no_download=no_download, zero_offset=args.zero_offset)
         exit(0)
     elif args.week_view is not None:
-        weekview(aday, args.week_view, args.calendar, no_download=no_download, zero_offset=args.zero_offset)
+        weekview(aday, args.week_view, args.calendar, no_download=no_download, zero_offset=args.zero_offset, interval=args.interval)
         exit(0)
-    agendamaker = Agenda(aday, args.calendar, no_download=no_download)
+    agendamaker = Agenda(aday, args.calendar, no_download=no_download, interval=args.interval)
     table = agendamaker.agenda_table()
     if not agendamaker.has_later and not args.date:
         aday = date.today() + t(days=1)
-        agendamaker = Agenda(aday, args.calendar, no_download=True)
+        agendamaker = Agenda(aday, args.calendar, no_download=True, interval=args.interval)
         table += agendamaker.agenda_table()
     agendamaker.print_table(table)
 
