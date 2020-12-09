@@ -146,6 +146,25 @@ def get_visible_cals(cals):
     allCals['all'] = allNames
     return allCals
 
+def filter_calendars(obj, calendars):
+    callist = []
+    allCals = get_visible_cals(obj['calendars'])
+    if not calendars:
+        calendars = 'all'
+    def _getCal(calendar):
+        if isinstance(calendar, list):
+            list(map(_getCal, calendar))
+        elif '@' not in calendar:
+            lookup = allCals.get(calendar)
+            if lookup is None:
+                print('Error: unknown calendar:', calendar, file=sys.stderr)
+                exit(1)
+            _getCal(lookup)
+        else:
+            callist.append(calendar)
+    _getCal(calendars)
+    return callist
+
 def download_evts(today):
     now = datetime.now(tzlocal())
     evs = []
@@ -226,11 +245,12 @@ def load_evts(today=None, no_download=False, print_warning=True):
     return obj, evt2short
 
 class Agenda:
-    def __init__(self, todate, no_download=False):
+    def __init__(self, todate, calendars, no_download=False):
         self.now = datetime.now(tzlocal())
         self.todate = aday
         self.today = datetime.combine(self.todate, time(0), tzlocal())
         self.obj, self.evt2short = load_evts(self.today, no_download=no_download, print_warning=False)
+        self.callist = filter_calendars(self.obj, calendars)
 
         self.interval = t(minutes=15)
 
@@ -285,6 +305,8 @@ class Agenda:
         self.timefield = ''
         self.curline = ''
         for evt in self.obj['events']:
+            if evt.calendar not in self.callist:
+                continue
             if evt.cancelled:
                 continue
             start = as_date(evt.start)
@@ -345,25 +367,12 @@ class Agenda:
         print('\n'.join(lines))
 
 
-def listcal(calendars, todate, no_download=False, no_recurring=False):
+def listcal(todate, calendars, no_download=False, no_recurring=False):
     today = datetime.combine(todate, time(0), tzlocal())
     now = datetime.now(tzlocal())
     obj, evt2short = load_evts(today, no_download=no_download)
 
-    callist = []
-    allCals = get_visible_cals(obj['calendars'])
-    def _getCal(calendar):
-        if isinstance(calendar, list):
-            callist.extend(map(_getCal, calendar))
-        elif '@' not in calendar:
-            lookup = allCals.get(calendar)
-            if lookup is None:
-                print('Error: unknown calendar:', calendar, file=sys.stderr)
-                exit(1)
-            _getCal(lookup)
-        else:
-            callist.append(calendar)
-    _getCal(calendars)
+    callist = filter_calendars(obj, calendars)
 
     weekday = today.isoweekday() % 7
     nextsunday = 7 - weekday
@@ -424,7 +433,7 @@ DASH = "─"
 PIPE = "│"
 THICK = "█"
 
-def fourweek(calendars, todate, no_download=False, zero_offset=False):
+def fourweek(todate, calendars, no_download=False, zero_offset=False):
     termsize = os.get_terminal_size()
 
     table_width = 7
@@ -483,20 +492,7 @@ def fourweek(calendars, todate, no_download=False, zero_offset=False):
         else:
             return evt.recurring
 
-    callist = []
-    allCals = get_visible_cals(obj['calendars'])
-    def _getCal(calendar):
-        if isinstance(calendar, list):
-            callist.extend(map(_getCal, calendar))
-        elif '@' not in calendar:
-            lookup = allCals.get(calendar)
-            if lookup is None:
-                print('Error: unknown calendar:', calendar, file=sys.stderr)
-                exit(1)
-            _getCal(lookup)
-        else:
-            callist.append(calendar)
-    _getCal(calendars)
+    callist = filter_calendars(obj, calendars)
 
     cells = [(list(), list()) for _ in range(table_width * table_height)]
 
@@ -579,9 +575,10 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--download-loop', action='store_true', help="don't print anything, just refresh the calendar cache")
     parser.add_argument('-n', '--no-download', action='store_true', help="don't attempt to refresh the calendar cache")
     parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
-    parser.add_argument('-l', '--list-calendar', metavar='CALENDAR', action='append', help='print a list of events from the specified calendar(s)')
+    parser.add_argument('-c', '--calendar', metavar='CALENDAR', action='append', help='restrict to specified calendar(s)')
+    parser.add_argument('-l', '--list-calendar', action='store_true', help='print a list of events')
     parser.add_argument('-R', '--no-recurring', action='store_true', help='do not print recurring events in list')
-    parser.add_argument('-x', '--four-week', metavar='CALENDAR', action='append', help='print a four-week diagram of the specified calendar(s)')
+    parser.add_argument('-x', '--four-week', action='store_true', help='print a four-week diagram')
     parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
     parser.add_argument('date', nargs='*', help='use this date instead of today')
     args = parser.parse_args()
@@ -600,16 +597,16 @@ if __name__ == '__main__':
         print("error: cannot specify both -l and -x", file=sys.stderr)
         exit(1)
     if args.list_calendar:
-        listcal(args.list_calendar, aday, no_download=no_download, no_recurring=args.no_recurring)
+        listcal(aday, args.calendar, no_download=no_download, no_recurring=args.no_recurring)
         exit(0)
     elif args.four_week:
-        fourweek(args.four_week, aday, no_download=no_download, zero_offset=args.zero_offset)
+        fourweek(aday, args.calendar, no_download=no_download, zero_offset=args.zero_offset)
         exit(0)
-    agendamaker = Agenda(aday, no_download=no_download)
+    agendamaker = Agenda(aday, args.calendar, no_download=no_download)
     table = agendamaker.agenda_table()
     if not agendamaker.has_later and not args.date:
         table.append(dtime() + ftime() + '     <-- ' + ftime(agendamaker.now, now=True))
         aday = date.today() + t(days=1)
-        agendamaker = Agenda(aday, no_download=True)
+        agendamaker = Agenda(aday, args.calendar, no_download=True)
         table += agendamaker.agenda_table()
     agendamaker.print_table(table)
