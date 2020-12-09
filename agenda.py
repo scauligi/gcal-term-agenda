@@ -14,7 +14,7 @@ from itertools import zip_longest
 import gcal
 from gcal import Event
 
-from colortrans import rgb2short
+from colortrans import rgb2short, short2rgb
 
 # https://stackoverflow.com/a/43950235
 # Monkey patch to force IPv4
@@ -316,12 +316,12 @@ class Agenda:
                         self.table[index][tick.time()] += '-+- ({}) '.format(ftime(evt.end).strip())
                     else:
                         self.table[index][tick.time()] += ' |  '
-                    if tick == quantize(evt.start) + self.interval and evt.location:
+                    if tick == quantize(evt.start) + self.interval and ndays is None and evt.location:
                         self.table[index][tick.time()] += evt.location + '  '
                     self.table[index][tick.time()] += RESET
                 tick = quantize(evt.start)
                 tock = tick + self.interval
-            elif (not skip):  # and evt.end <= tock:
+            elif (not skip) and ndays is None:  # and evt.end <= tock:
                 endtime = ' ' + evt.location + endtime
             summary = fg(self.evt2short(evt, dark=dark)) + evt.summary + endtime + RESET + '   '
             self.table[index][tick.time()] += summary
@@ -591,21 +591,36 @@ def weekview(todate, ndays, calendars, no_download=False, zero_offset=False):
                     lastcode[i] = tok
                 else:
                     tokstack.append(lastcode[i] + tok)
-            if counter % inner_width == 0 and tokstack[-1][-1].isalnum():
+            if counter < (inner_width * table_width) and counter % inner_width == 0 and tokstack[-1][-1].isalnum():
                 tokstack[-1] = tokstack[-1][:-1] + '\033[1m' + tokstack[-1][-1] + '\033[0m'
                 if line and line[-1][-1] not in (' ', '\0'):
                     line[-1] = line[-1][:-1] + '⋯'
+            flubbed = False
             spaced = False
             while tokstack:
                 tok = tokstack.pop()
                 if tok[-1] == '\0':
-                    pass
+                    flubbed = True
+                    i -= 1
                 elif tok[-1] == ' ':
                     spaced = True
+                    i -= 1
                 else:
                     if spaced:
                         tok = tok[:-1] + '⋯'
                     break
+            if flubbed or spaced:
+                code, c = tok[:-1], tok[-1]
+                if m := re.search(r'\[38;5;(\d+)m', code):
+                    short = m.group(1)
+                    rgb = short2rgb(short)
+                    rgb = [int(rgb[x:x+2], 16) for x in (0, 2, 4)]
+                    v = max(rgb)
+                    new_v = max(v - 70, 0)
+                    scaling = new_v / v
+                    dark_code = ''.join(f'{round(x*scaling):02x}' for x in rgb)
+                    dark_code = rgb2short(dark_code)[0]
+                    tok = fg(dark_code) + c
             if tok[-1] == '\0':
                 tok = ' '
             line.append(tok)
