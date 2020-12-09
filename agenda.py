@@ -621,7 +621,7 @@ def weekview(todate, ndays, calendars, no_download=False, zero_offset=False):
         if zero_offset:
             offset = (offset - 1) % 7
     start = todate - t(days=offset)
-    agendamaker = Agenda(start, calendars, no_download=False)
+    agendamaker = Agenda(start, calendars, no_download=no_download)
     table = agendamaker.agenda_table(ndays=table_width)
     newtable = []
     timefield = ftime()
