@@ -9,6 +9,7 @@ import pickle
 from collections import Counter, OrderedDict, defaultdict as ddict
 from datetime import date, datetime, time, timedelta as t, timezone
 from dateutil.tz import tzlocal
+from itertools import zip_longest
 
 import gcal
 from gcal import Event
@@ -282,7 +283,7 @@ class Agenda:
                 dateline = fg(self.evt2short(evt)) + dateline
                 dateline += RESET
                 length = (evt.end - evt.start).days
-                for i in range(index, index + length):
+                for i in range(index, min(actual_ndays + 1, index + length)):
                     self.table[i][None].append(dateline)
                 continue
             dark = False
@@ -297,7 +298,10 @@ class Agenda:
                 endtime = ' ({})'.format(ftime(evt.start).strip())
             if evt.end <= tock and evt.end != evt.start:
                 endtime += ' (-> {})'.format(ftime(evt.end).strip())
-            if evt.end > self.now and evt.end > tock:
+            skip = ndays is None and evt.end <= self.now
+            if evt.end <= self.now:
+                dark = True
+            if evt.end > tock and (not skip):
                 self.has_later = True
                 initial = blen(self.table[index][tick.time()])
                 while evt.end > tock:
@@ -305,7 +309,7 @@ class Agenda:
                     tock = tick + self.interval
                     if (length := blen(self.table[index][tick.time()])) < initial:
                         self.table[index][tick.time()] += ' ' * (initial - length)
-                    self.table[index][tick.time()] += fg(self.evt2short(evt))
+                    self.table[index][tick.time()] += fg(self.evt2short(evt, dark=dark))
                     if evt.end == tock:
                         self.table[index][tick.time()] += '_|_ '
                     elif evt.end < tock:
@@ -317,10 +321,8 @@ class Agenda:
                     self.table[index][tick.time()] += RESET
                 tick = quantize(evt.start)
                 tock = tick + self.interval
-            elif evt.end > self.now:  # and evt.end <= tock
+            elif (not skip):  # and evt.end <= tock:
                 endtime = ' ' + evt.location + endtime
-            else:  # evt.end <= self.now
-                dark = True
             summary = fg(self.evt2short(evt, dark=dark)) + evt.summary + endtime + RESET + '   '
             self.table[index][tick.time()] += summary
 
@@ -476,16 +478,17 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
 
     obj, _evt2short = load_evts(today, no_download=no_download)
     now = datetime.now(tzlocal())
+    nowdate = now.date()
     def evt2short(evt):
-        if as_date(evt.start) < todate:
+        if as_date(evt.start) < nowdate:
             dark = True
-        elif as_date(evt.start) == todate:
+        elif as_date(evt.start) == nowdate:
             dark = isinstance(evt.end, datetime) and evt.end <= now
         else:
             dark = evt.recurring
         return _evt2short(evt, dark=dark)
     def choice(evt):
-        if as_date(evt.start) == todate:
+        if as_date(evt.start) == nowdate:
             return isinstance(evt.end, datetime) and evt.start >= now
         else:
             return evt.recurring
@@ -536,8 +539,9 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
                 lineIndex = i * (inner_height + 1) + l + 1
                 text = ' ' * inner_width
                 if l == 0:
-                    datetext = dtime(todate + t(days=(i * table_width + j - offset)))
-                    if i * table_width + j == offset:
+                    celldate = todate + t(days=(i * table_width + j - offset))
+                    datetext = dtime(celldate)
+                    if celldate == now.date():
                         datetext = f'> {datetext} <'
                     text = shorten(f'{datetext:^{inner_width}}')
                 elif l == 1:
@@ -566,19 +570,92 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
             print(line)
 
 def weekview(todate, ndays, calendars, no_download=False, zero_offset=False):
-    from doublebuffer import tokenize, linesplit
+    from doublebuffer import tokenize
     termsize = os.get_terminal_size()
     table_width = ndays if ndays > 0 else 7
-    inner_width = termsize.columns // table_width
-    offset = todate.isoweekday() % 7
-    rev_offset = 0
-    if zero_offset:
-        rev_offset = (7 - offset) % 7
-        offset = 0
-    agendamaker = Agenda(todate, calendars, no_download=False)
+    timecol = len(ftime() + '  ')
+    inner_width = (termsize.columns - timecol) // table_width
+    def overlay(rows):
+        def pop(tokens):
+            if tokens:
+                return tokens.pop(0)
+            return '\0'
+        tokens = [tokenize(row) for row in rows]
+        lastcode = [RESET] * len(rows)
+        line = []
+        counter = 0
+        while any(tokens):
+            tokstack = []
+            for i in range(min(table_width, counter // inner_width + 1)):
+                while (tok := pop(tokens[i])).startswith('\033'):
+                    lastcode[i] = tok
+                else:
+                    tokstack.append(lastcode[i] + tok)
+            if counter % inner_width == 0 and tokstack[-1][-1].isalnum():
+                tokstack[-1] = tokstack[-1][:-1] + '\033[1m' + tokstack[-1][-1] + '\033[0m'
+                if line and line[-1][-1] not in (' ', '\0'):
+                    line[-1] = line[-1][:-1] + '⋯'
+            spaced = False
+            while tokstack:
+                tok = tokstack.pop()
+                if tok[-1] == '\0':
+                    pass
+                elif tok[-1] == ' ':
+                    spaced = True
+                else:
+                    if spaced:
+                        tok = tok[:-1] + '⋯'
+                    break
+            if tok[-1] == '\0':
+                tok = ' '
+            line.append(tok)
+            counter += 1
+            if counter == termsize.columns - timecol:
+                if line[-1][-1] not in (' ', '\0'):
+                    line[-1] = line[-1][:-1] + '⋯'
+                break
+        return ''.join(line)
+    offset = 0
+    if ndays == 0:
+        offset = todate.isoweekday() % 7
+        if zero_offset:
+            offset = (offset - 1) % 7
+    start = todate - t(days=offset)
+    agendamaker = Agenda(start, calendars, no_download=False)
     table = agendamaker.agenda_table(ndays=table_width)
-    table = [''.join(rows) for rows in table]
-    print('\n'.join(table))
+    newtable = []
+    timefield = ftime()
+    dateline = timefield + '  '
+    for n in range(table_width):
+        d = start + t(days=n)
+        datetext = dtime(d)
+        if d == agendamaker.now.date():
+            datetext = f'{datetext.rstrip()} <'
+        dateline += format(datetext, f'<{inner_width}')
+    newtable.append(dateline)
+    for row in zip_longest(*(table[i][None] for i in range(1, table_width + 1)), fillvalue=''):
+        row = overlay(row)
+        newtable.append(timefield + '  ' + ''.join(row) + RESET)
+    def colize(daycol):
+        newcol = []
+        for minutes in range(0, 24 * 60, agendamaker.interval.seconds // 60):
+            tickt = time(minutes // 60, minutes % 60)
+            newcol.append(daycol[tickt])
+        return newcol
+    did_first = False
+    table = map(colize, table)
+    for row in zip(*table):
+        timefield = row[0] or ftime()
+        row = overlay(row[1:])
+        line = timefield + '  ' + ''.join(row)
+        line = line.rstrip()
+        if line or did_first:
+            newtable.append(line)
+            did_first = True
+    while not (lastline := newtable.pop()):
+        pass
+    newtable.append(lastline)
+    print((RESET + '\n').join(newtable) + RESET)
 
 def main():
     import sys
