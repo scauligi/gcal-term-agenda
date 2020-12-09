@@ -15,6 +15,15 @@ from gcal import Event
 
 from colortrans import rgb2short
 
+# https://stackoverflow.com/a/43950235
+# Monkey patch to force IPv4
+def ipv4_monkey_patch():
+    import socket
+    orig_gai = socket.getaddrinfo
+    def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        return orig_gai(host, port, family=socket.AF_INET, type=type, proto=proto, flags=flags)
+    socket.getaddrinfo = getaddrinfo
+
 # https://stackoverflow.com/a/56842689
 class reversor:
     def __init__(self, obj):
@@ -566,6 +575,7 @@ if __name__ == '__main__':
     import sys
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument('-4', '--force-ipv4', action='store_true', help="force IPv4 sockets")
     parser.add_argument('-d', '--download-loop', action='store_true', help="don't print anything, just refresh the calendar cache")
     parser.add_argument('-n', '--no-download', action='store_true', help="don't attempt to refresh the calendar cache")
     parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
