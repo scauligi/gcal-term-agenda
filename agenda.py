@@ -36,6 +36,7 @@ class reversor:
 
 def fg(short):
     return f'\033[38;5;{short}m'
+LGRAY = fg(250)
 RESET = '\033[0m'
 
 def blen(line):
@@ -228,11 +229,18 @@ def load_evts(today=None, no_download=False, print_warning=True):
     return obj, evt2short
 
 class Agenda:
-    def __init__(self, todate, calendars, no_download=False, interval=15):
+    def __init__(self, todate, calendars, no_download=False, dark_recurring=False, interval=15):
         self.now = datetime.now(tzlocal())
         self.todate = todate
         self.today = datetime.combine(self.todate, time(0), tzlocal())
-        self.obj, self.evt2short = load_evts(self.today, no_download=no_download, print_warning=False)
+        self.obj, evt2short = load_evts(self.today, no_download=no_download, print_warning=False)
+        def _evt2short(evt):
+            if as_date(evt.start) > as_date(self.now):
+                dark = dark_recurring and evt.recurring
+            else:
+                dark = as_datetime(evt.end) <= self.now
+            return evt2short(evt, dark=dark)
+        self.evt2short = _evt2short
         self.callist = filter_calendars(self.obj, calendars)
 
         self.interval = t(minutes=interval)
@@ -279,7 +287,7 @@ class Agenda:
         self.did_first = False
         self.timefield = ''
         for evt in presort:
-            index = (as_date(evt.start) - self.todate).days + 1
+            index = max((as_date(evt.start) - self.todate).days, 0) + 1
             if not isinstance(evt.start, datetime):
                 dateline = evt.summary
                 dateline = fg(self.evt2short(evt)) + dateline
@@ -288,7 +296,6 @@ class Agenda:
                 for i in range(index, min(actual_ndays + 1, index + length)):
                     self.table[i][None].append(dateline)
                 continue
-            dark = False
             endtime = ''
             tick = quantize(evt.start)
             tock = tick + self.interval
@@ -303,8 +310,6 @@ class Agenda:
             elif evt.end < tock:
                 endtime += ' (-> {})'.format(ftime(evt.end).strip())
             skip = ndays is None and evt.end <= self.now
-            if evt.end <= self.now:
-                dark = True
             if evt.end > tock and (not skip):
                 self.has_later = True
                 initial = blen(self.table[index][tick.time()])
@@ -313,7 +318,7 @@ class Agenda:
                     tock = tick + self.interval
                     if (length := blen(self.table[index][tick.time()])) < initial:
                         self.table[index][tick.time()] += ' ' * (initial - length)
-                    self.table[index][tick.time()] += fg(self.evt2short(evt, dark=dark))
+                    self.table[index][tick.time()] += fg(self.evt2short(evt))
                     if evt.end == tock:
                         self.table[index][tick.time()] += '_|_ '
                     elif evt.end < tock:
@@ -327,7 +332,7 @@ class Agenda:
                 tock = tick + self.interval
             elif (not skip) and ndays is None:  # and evt.end <= tock:
                 endtime = ' ' + evt.location + endtime
-            summary = fg(self.evt2short(evt, dark=dark)) + evt.summary + endtime + RESET + '   '
+            summary = fg(self.evt2short(evt)) + evt.summary + endtime + RESET + '   '
             self.table[index][tick.time()] += summary
 
         if outofdate := string_outofdate(self.obj, self.now):
@@ -469,7 +474,7 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
             index = rev_offset * (inner_width + 1)
             line = line[:index] + thick + line[index+1:]
         line = line[:-1] + right
-        return line
+        return LGRAY + line + RESET
 
     # set up table borders
     table.append(do_row(DASH, *CORNERS[0]))
@@ -484,12 +489,10 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
     now = datetime.now(tzlocal())
     nowdate = now.date()
     def evt2short(evt):
-        if as_date(evt.start) < nowdate:
-            dark = True
-        elif as_date(evt.start) == nowdate:
-            dark = isinstance(evt.end, datetime) and evt.end <= now
-        else:
+        if as_date(evt.start) > as_date(now):
             dark = evt.recurring
+        else:
+            dark = as_datetime(evt.end) <= now
         return _evt2short(evt, dark=dark)
     def choice(evt):
         if as_date(evt.start) == nowdate:
@@ -545,11 +548,13 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
                 if l == 0:
                     celldate = todate + t(days=(i * table_width + j - offset))
                     datetext = dtime(celldate)
+                    dcolor = LGRAY
                     if celldate == now.date():
                         datetext = f'> {datetext} <'
-                    text = shorten(f'{datetext:^{inner_width}}')
+                        dcolor = RESET
+                    text = dcolor + shorten(f'{datetext:^{inner_width}}') + RESET
                 elif l == 1:
-                    text = DASH * inner_width
+                    text = LGRAY + DASH * inner_width + RESET
                 else:
                     l -= 2
                     if l + 2 == inner_height - 1 and len(cell) > l + 1:
@@ -564,16 +569,16 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
             text = ''
             for i, segment in enumerate(line):
                 if rev_offset and rev_offset == i:
-                    text += THICK
+                    text += LGRAY + THICK + RESET
                 else:
-                    text += PIPE
+                    text += LGRAY + PIPE + RESET
                 text += segment
-            text += PIPE
+            text += LGRAY + PIPE + RESET
             print(text)
         else:
             print(line)
 
-def weekview(todate, ndays, calendars, no_download=False, zero_offset=False, interval=15, inner_width=None):
+def weekview(todate, ndays, calendars, no_download=False, dark_recurring=False, zero_offset=False, interval=15, inner_width=None):
     from doublebuffer import tokenize
     table_width = ndays if ndays > 0 else 7
     timecol = len(ftime() + '  ')
@@ -643,7 +648,7 @@ def weekview(todate, ndays, calendars, no_download=False, zero_offset=False, int
         if zero_offset:
             offset = (offset - 1) % 7
     start = todate - t(days=offset)
-    agendamaker = Agenda(start, calendars, no_download=no_download, interval=interval)
+    agendamaker = Agenda(start, calendars, no_download=no_download, dark_recurring=dark_recurring, interval=interval)
     table = agendamaker.agenda_table(ndays=table_width)
     newtable = []
     timefield = ftime()
@@ -697,6 +702,8 @@ def main():
     parser.add_argument('-m', '--inner-width', metavar='N', type=int, help='inner width for week view')
     parser.add_argument('date', nargs='*', help='use this date instead of today')
     args = parser.parse_args()
+    if args.force_ipv4:
+        ipv4_monkey_patch()
     no_download = args.no_download and not args.force_download_check
     if args.download_loop:
         load_evts()
@@ -722,7 +729,7 @@ def main():
         fourweek(aday, args.calendar, no_download=no_download, zero_offset=args.zero_offset)
         exit(0)
     elif args.week_view is not None:
-        weekview(aday, args.week_view, args.calendar, no_download=no_download, zero_offset=args.zero_offset, interval=args.interval, inner_width=args.inner_width)
+        weekview(aday, args.week_view, args.calendar, no_download=no_download, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, inner_width=args.inner_width)
         exit(0)
     agendamaker = Agenda(aday, args.calendar, no_download=no_download, interval=args.interval)
     table = agendamaker.agenda_table()
