@@ -149,7 +149,7 @@ def filter_calendars(obj, calendars):
     _getCal(calendars)
     return callist
 
-def download_evts(today):
+def download_evts(refdate):
     now = datetime.now(tzlocal())
     evs = []
     day_evs = []
@@ -161,8 +161,8 @@ def download_evts(today):
         r = gcal.s().events().list(calendarId=calId,
                 singleEvents=True,
                 orderBy='startTime',
-                timeMin=(today - t(days=10)).isoformat(),
-                timeMax=(today + t(days=30)).isoformat()).execute()
+                timeMin=(refdate - t(days=10)).isoformat(),
+                timeMax=(refdate + t(days=30)).isoformat()).execute()
         for e in r['items']:
             ev = Event.unpkg(e)
             ev.calendar = calId
@@ -172,7 +172,7 @@ def download_evts(today):
     with open('evts.yaml', 'w') as f:
         yaml.dump(obj, f, default_flow_style=False)
     with open('evts.pickle', 'wb') as f:
-        pickle.dump(obj, f)
+        pickle.dump(obj, f, protocol=-1)
     return obj
 
 def string_outofdate(obj, now=None):
@@ -186,9 +186,9 @@ def print_outofdate(obj):
     if s := string_outofdate(obj):
         print(s, file=sys.stderr)
 
-def load_evts(today=None, no_download=False, print_warning=True):
+def load_evts(refdate=None, no_download=False, print_warning=False):
     now = datetime.now(tzlocal())
-    today = datetime.combine(today or date.today(), time(0), tzlocal())
+    refdate = datetime.combine(refdate or date.today(), time(0), tzlocal())
     try:
         try:
             with open('evts.pickle', 'rb') as f:
@@ -203,13 +203,18 @@ def load_evts(today=None, no_download=False, print_warning=True):
         if obj['timestamp'] > now:
             print(obj['timestamp'])
             exit(1)
-        elif obj['timestamp'] + t(minutes=5) < now and not no_download:
+        elif obj['timestamp'] + t(minutes=5) < now:
+            if print_warning:
+                print('timestamp out of date, redownloading...', file=sys.stderr)
             raise FileNotFoundError
     except FileNotFoundError:
-        obj = download_evts(today)
-    if print_warning:
-        print_outofdate(obj)
+        if not no_download:
+            obj = download_evts(refdate)
 
+    evt2short = make_evt2short(obj)
+
+    return obj, evt2short
+def make_evt2short(obj):
     cal2short = {}
     cal2dark = {}
     for cal in obj['calendars']:
@@ -225,15 +230,14 @@ def load_evts(today=None, no_download=False, print_warning=True):
         if dark:
             return cal2dark[evt.calendar]
         return cal2short[evt.calendar]
-
-    return obj, evt2short
+    return evt2short
 
 class Agenda:
-    def __init__(self, todate, calendars, no_download=False, dark_recurring=False, interval=15):
+    def __init__(self, calendars, objs=None, dark_recurring=False, interval=15):
         self.now = datetime.now(tzlocal())
-        self.todate = todate
-        self.today = datetime.combine(self.todate, time(0), tzlocal())
-        self.obj, evt2short = load_evts(self.today, no_download=no_download, print_warning=False)
+        if objs is None:
+            objs = load_evts(no_download=True, print_warning=False)
+        self.obj, evt2short = objs
         def _evt2short(evt):
             if as_date(evt.start) > as_date(self.now):
                 dark = dark_recurring and evt.recurring
@@ -245,13 +249,15 @@ class Agenda:
 
         self.interval = t(minutes=interval)
 
-        self.has_later = False
-
-    def agenda_table(self, ndays=None):
+    def agenda_table(self, todate, ndays=None):
         def quantize(thetime):
             minutes = self.interval.seconds // 60
             theminutes = (thetime.hour * 60 + thetime.minute) // minutes * minutes
             return datetime(thetime.year, thetime.month, thetime.day, theminutes // 60, theminutes % 60, tzinfo=thetime.tzinfo)
+
+        self.todate = todate
+        self.today = datetime.combine(self.todate, time(0), tzlocal())
+        self.has_later = False
 
         actual_ndays = ndays or 1
         self.table = []
@@ -341,16 +347,20 @@ class Agenda:
         if ndays is None:
             newtable = []
             nowtick = quantize(self.now)
-            if self.now.date() == self.todate:
-                self.table[1][nowtick.time()] += '  <-- ' + ftime(self.now, now=True)
-            if self.table[0][None]:
-                newtable.extend(self.table[0][None])
             datefield = dtime(self.todate)
             timefield = ftime().replace(' ', '-')
+            did_first = False
+            if self.table[0][None]:
+                newtable.extend(self.table[0][None])
+            if len(self.table[1].keys()) == 1 and not self.table[1][None]:
+                newtable.append(f'{datefield} {LGRAY}{timefield}  no events{RESET}')
+                datefield = dtime()
+                did_first = True
             for row in self.table[1][None]:
                 newtable.append(f'{datefield} {timefield}  {row}')
                 datefield = dtime()
-            did_first = False
+            if self.now.date() == self.todate:
+                self.table[1][nowtick.time()] += '  <-- ' + ftime(self.now, now=True)
             for minutes in range(0, 24 * 60, self.interval.seconds // 60):
                 tickt = time(minutes // 60, minutes % 60)
                 tick = datetime.combine(self.todate, tickt, tzinfo=self.today.tzinfo)
@@ -364,22 +374,27 @@ class Agenda:
                 newtable.append(f'{datefield} {timefield}  {row}'.rstrip())
                 datefield = dtime()
                 did_first = True
-            while not (lastline := newtable.pop()):
+            while newtable and not (lastline := newtable.pop()):
                 pass
             newtable.append(lastline)
             return newtable
         return self.table
 
 
-    def print_table(self, table):
+    @staticmethod
+    def print_table(table):
         lines = re.sub(r'\n{8,}', r'\n'*8, '\n'.join(line.rstrip() for line in table)).split('\n')
         print('\n'.join(lines))
 
 
-def listcal(todate, calendars, no_download=False, no_recurring=False):
+def listcal(todate, calendars, no_recurring=False, objs=None):
     today = datetime.combine(todate, time(0), tzlocal())
     now = datetime.now(tzlocal())
-    obj, evt2short = load_evts(today, no_download=no_download)
+    obj, evt2short = objs
+
+    table = []
+    if outofdate := string_outofdate(obj, now):
+        table.append(outofdate)
 
     callist = filter_calendars(obj, calendars)
 
@@ -420,7 +435,7 @@ def listcal(todate, calendars, no_download=False, no_recurring=False):
             while highwater and (highwater[0][0] is None or start >= highwater[0][0]):
                 _, s = highwater.pop(0)
             if s:
-                print(fg(4) + s + RESET)
+                table.append(fg(4) + s + RESET)
             dark = isinstance(evt.end, datetime) and evt.end < now
             white = fg(8) if dark else ''
             fmt = '  '
@@ -431,7 +446,8 @@ def listcal(todate, calendars, no_download=False, no_recurring=False):
             fmt += fg(evt2short(evt, dark=dark)) + evt.summary + RESET
             fmt += ' '
             fmt += white + tdtime(evt.end - evt.start) + RESET
-            print(fmt)
+            table.append(fmt)
+    return table
 
 
 CORNERS = """\
@@ -648,8 +664,9 @@ def weekview(todate, ndays, calendars, no_download=False, dark_recurring=False, 
         if zero_offset:
             offset = (offset - 1) % 7
     start = todate - t(days=offset)
-    agendamaker = Agenda(start, calendars, no_download=no_download, dark_recurring=dark_recurring, interval=interval)
-    table = agendamaker.agenda_table(ndays=table_width)
+    objs = load_evts(todate, no_download)
+    agendamaker = Agenda(calendars, objs=objs, dark_recurring=dark_recurring, interval=interval)
+    table = agendamaker.agenda_table(start, ndays=table_width)
     newtable = []
     timefield = ftime()
     dateline = timefield + '  '
@@ -684,31 +701,102 @@ def weekview(todate, ndays, calendars, no_download=False, dark_recurring=False, 
     newtable.append(lastline)
     print((RESET + '\n').join(newtable) + RESET)
 
-def main():
-    import sys
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-4', '--force-ipv4', action='store_true', help="force IPv4 sockets")
-    parser.add_argument('-d', '--download-loop', action='store_true', help="don't print anything, just refresh the calendar cache")
-    parser.add_argument('-n', '--no-download', action='store_true', help="don't attempt to refresh the calendar cache")
-    parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
-    parser.add_argument('-c', '--calendar', metavar='CALENDAR', action='append', help='restrict to specified calendar(s)')
-    parser.add_argument('-i', '--interval', metavar='MINUTES', action='store', type=int, default=15, help='interval for default/week view')
-    parser.add_argument('-l', '--list-calendar', action='store_true', help='print a list of events')
-    parser.add_argument('-R', '--no-recurring', action='store_true', help='do not print recurring events in list')
-    parser.add_argument('-x', '--four-week', action='store_true', help='print a four-week diagram')
-    parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
-    parser.add_argument('-w', '--week-view', metavar='N', nargs='?', const=0, type=int, help='print a multi-day view (of N days)')
-    parser.add_argument('-m', '--inner-width', metavar='N', type=int, help='inner width for week view')
-    parser.add_argument('date', nargs='*', help='use this date instead of today')
-    args = parser.parse_args()
+SOCK = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'unix_sock')
+import asyncio
+import signal
+from async_utils import read_pickled, write_pickled
+def server():
+    if os.path.exists(SOCK):
+        # not a race since we check again later
+        raise Exception(SOCK + ' already exists')
+    obj_lock = asyncio.Lock()
+    objs = load_evts(print_warning=True)
+    agenda = Agenda(None, objs=objs)
+    async def download_loop():
+        nonlocal objs
+        nonlocal agenda
+        while True:
+            async with obj_lock:
+                objs = load_evts(print_warning=True)
+                agenda = Agenda(None, objs=objs)
+            print('loaded ok:', datetime.now())
+            await asyncio.sleep(5*60)
+    async def handle_connection(reader, writer):
+        args = await read_pickled(reader)
+        try:
+            async with obj_lock:
+                table = main(args, agendamaker=agenda, objs=objs)
+        except Exception as e:
+            table = [str(e)]
+        write_pickled(writer, table)
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+    async def start_server():
+        timer = asyncio.create_task(download_loop())
+        if os.path.exists(SOCK):
+            # XXX could race
+            raise Exception(SOCK + ' already exists')
+        server = await asyncio.start_unix_server(handle_connection, SOCK)
+        # XXX could race
+        signal.signal(signal.SIGINT, cleanup)
+        signal.signal(signal.SIGTERM, cleanup)
+        try:
+            async with server:
+                await server.serve_forever()
+        finally:
+            cleanup()
+    def cleanup(_signum=None, _frame=None):
+        try:
+            os.remove(SOCK)
+        except:
+            pass
+        exit(1)
+    asyncio.run(start_server())
+def client(args):
+    async def do_client():
+        reader, writer = await asyncio.open_unix_connection(SOCK)
+        write_pickled(writer, args)
+        await writer.drain()
+        table = await read_pickled(reader)
+        writer.close()
+        await writer.wait_closed()
+        return table
+    return asyncio.run(do_client())
+
+def main(args=None, agendamaker=None, objs=None):
+    if args is None:
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument('-4', '--force-ipv4', action='store_true', help="force IPv4 sockets")
+        parser.add_argument('-d', '--download-loop', action='store_true', help="don't print anything, just refresh the calendar cache")
+        parser.add_argument('--serve', action='store_true', help="start server")
+        parser.add_argument('--client', action='store_const', const=1, help="run as client")
+        parser.add_argument('-n', '--no-download', action='store_true', help="don't attempt to refresh the calendar cache")
+        parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
+        parser.add_argument('-c', '--calendar', metavar='CALENDAR', action='append', help='restrict to specified calendar(s)')
+        parser.add_argument('-i', '--interval', metavar='MINUTES', action='store', type=int, default=15, help='interval for default/week view')
+        parser.add_argument('-l', '--list-calendar', action='store_true', help='print a list of events')
+        parser.add_argument('-R', '--no-recurring', action='store_true', help='do not print recurring events in list')
+        parser.add_argument('-x', '--four-week', action='store_true', help='print a four-week diagram')
+        parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
+        parser.add_argument('-w', '--week-view', metavar='N', nargs='?', const=0, type=int, help='print a multi-day view (of N days)')
+        parser.add_argument('-m', '--inner-width', metavar='N', type=int, help='inner width for week view')
+        parser.add_argument('date', nargs='*', help='use this date instead of today')
+        args = parser.parse_args(args)
     if args.force_ipv4:
         ipv4_monkey_patch()
     no_download = args.no_download and not args.force_download_check
     if args.download_loop:
-        load_evts()
+        load_evts(print_warning=True)
         print('loaded ok:', datetime.now())
         exit(0)
+    if args.serve:
+        server()
+        exit(0)
+    elif args.client == 1:
+        args.client = 2
+        return client(args)
     if args.date:
         import parsedatetime
         pdt = parsedatetime.Calendar()
@@ -722,22 +810,25 @@ def main():
     if modes > 1:
         print("error: cannot specify more than one major mode", file=sys.stderr)
         exit(1)
+    if objs is None:
+        objs = load_evts(aday, no_download=args.no_download)
     if args.list_calendar:
-        listcal(aday, args.calendar, no_download=no_download, no_recurring=args.no_recurring)
-        exit(0)
+        table = listcal(aday, args.calendar, no_recurring=args.no_recurring, objs=objs)
+        return table
     elif args.four_week:
         fourweek(aday, args.calendar, no_download=no_download, zero_offset=args.zero_offset)
         exit(0)
     elif args.week_view is not None:
         weekview(aday, args.week_view, args.calendar, no_download=no_download, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, inner_width=args.inner_width)
         exit(0)
-    agendamaker = Agenda(aday, args.calendar, no_download=no_download, interval=args.interval)
-    table = agendamaker.agenda_table()
+    if agendamaker is None:
+        agendamaker = Agenda(args.calendar, objs=objs, interval=args.interval)
+    table = agendamaker.agenda_table(aday)
     if not agendamaker.has_later and not args.date:
         aday = date.today() + t(days=1)
-        agendamaker = Agenda(aday, args.calendar, no_download=True, interval=args.interval)
-        table += agendamaker.agenda_table()
-    agendamaker.print_table(table)
+        table += agendamaker.agenda_table(aday)
+    return table
 
 if __name__ == '__main__':
-    main()
+    table = main()
+    Agenda.print_table(table)
