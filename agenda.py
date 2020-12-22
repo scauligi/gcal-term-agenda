@@ -5,6 +5,7 @@ import re
 import sys
 import yaml
 import pickle
+import argparse
 
 from collections import Counter, OrderedDict, defaultdict as ddict
 from datetime import date, datetime, time, timedelta as t, timezone
@@ -182,13 +183,8 @@ def string_outofdate(obj, now=None):
         return fg(3) + 'Warning: timestamp is out of date by ' + tdtime(now - obj['timestamp']) + RESET
     return None
 
-def print_outofdate(obj):
-    if s := string_outofdate(obj):
-        print(s, file=sys.stderr)
-
-def load_evts(refdate=None, no_download=False, print_warning=False):
+def load_evts(*, print_warning=False):
     now = datetime.now(tzlocal())
-    refdate = datetime.combine(refdate or date.today(), time(0), tzlocal())
     try:
         try:
             with open('evts.pickle', 'rb') as f:
@@ -205,11 +201,9 @@ def load_evts(refdate=None, no_download=False, print_warning=False):
             exit(1)
         elif obj['timestamp'] + t(minutes=5) < now:
             if print_warning:
-                print('timestamp out of date, redownloading...', file=sys.stderr)
-            raise FileNotFoundError
+                print('timestamp out of date', file=sys.stderr)
     except FileNotFoundError:
-        if not no_download:
-            obj = download_evts(refdate)
+        raise
 
     evt2short = make_evt2short(obj)
 
@@ -236,7 +230,7 @@ class Agenda:
     def __init__(self, calendars, objs=None, dark_recurring=False, interval=15):
         self.now = datetime.now(tzlocal())
         if objs is None:
-            objs = load_evts(no_download=True, print_warning=False)
+            objs = load_evts(print_warning=False)
         self.obj, evt2short = objs
         def _evt2short(evt):
             if as_date(evt.start) > as_date(self.now):
@@ -249,7 +243,7 @@ class Agenda:
 
         self.interval = t(minutes=interval)
 
-    def agenda_table(self, todate, ndays=None):
+    def agenda_table(self, todate, ndays=None, print_warning=True):
         def quantize(thetime):
             minutes = self.interval.seconds // 60
             theminutes = (thetime.hour * 60 + thetime.minute) // minutes * minutes
@@ -341,8 +335,9 @@ class Agenda:
             summary = fg(self.evt2short(evt)) + evt.summary + endtime + RESET + '   '
             self.table[index][tick.time()] += summary
 
-        if outofdate := string_outofdate(self.obj, self.now):
-            self.table[0][None].append(outofdate)
+        if print_warning:
+            if outofdate := string_outofdate(self.obj, self.now):
+                self.table[0][None].append(outofdate)
 
         if ndays is None:
             newtable = []
@@ -458,7 +453,7 @@ DASH = "─"
 PIPE = "│"
 THICK = "█"
 
-def fourweek(todate, calendars, no_download=False, zero_offset=False):
+def fourweek(todate, calendars, zero_offset=False):
     termsize = os.get_terminal_size()
 
     table_width = 7
@@ -501,7 +496,7 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
     table.pop()
     table.append(do_row(DASH, *CORNERS[2]))
 
-    obj, _evt2short = load_evts(today, no_download=no_download)
+    obj, _evt2short = load_evts()
     now = datetime.now(tzlocal())
     nowdate = now.date()
     def evt2short(evt):
@@ -580,6 +575,7 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
                         text = cell[l]
                 table[lineIndex].append(text)
 
+    newtable = []
     for line in table:
         if isinstance(line, list):
             text = ''
@@ -590,11 +586,16 @@ def fourweek(todate, calendars, no_download=False, zero_offset=False):
                     text += LGRAY + PIPE + RESET
                 text += segment
             text += LGRAY + PIPE + RESET
-            print(text)
+            newtable.append(text)
         else:
-            print(line)
+            newtable.append(line)
+    if outofdate := string_outofdate(obj, now):
+        codelen = 11
+        offset = 2 + codelen
+        newtable[0] = newtable[0][:offset] + outofdate + newtable[0][:codelen] + newtable[0][blen(outofdate)+offset:]
+    return newtable
 
-def weekview(todate, ndays, calendars, no_download=False, dark_recurring=False, zero_offset=False, interval=15, inner_width=None):
+def weekview(todate, ndays, calendars, dark_recurring=False, zero_offset=False, interval=15, inner_width=None):
     from doublebuffer import tokenize
     table_width = ndays if ndays > 0 else 7
     timecol = len(ftime() + '  ')
@@ -664,7 +665,7 @@ def weekview(todate, ndays, calendars, no_download=False, dark_recurring=False, 
         if zero_offset:
             offset = (offset - 1) % 7
     start = todate - t(days=offset)
-    objs = load_evts(todate, no_download)
+    objs = load_evts()
     agendamaker = Agenda(calendars, objs=objs, dark_recurring=dark_recurring, interval=interval)
     table = agendamaker.agenda_table(start, ndays=table_width)
     newtable = []
@@ -699,7 +700,9 @@ def weekview(todate, ndays, calendars, no_download=False, dark_recurring=False, 
     while not (lastline := newtable.pop()):
         pass
     newtable.append(lastline)
-    print((RESET + '\n').join(newtable) + RESET)
+    if outofdate := string_outofdate(agendamaker.obj, agendamaker.now):
+        newtable.insert(0, outofdate)
+    return [line + RESET for line in newtable]
 
 SOCK = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'unix_sock')
 import asyncio
@@ -722,10 +725,11 @@ def server():
             print('loaded ok:', datetime.now())
             await asyncio.sleep(5*60)
     async def handle_connection(reader, writer):
-        args = await read_pickled(reader)
+        argstring = await read_pickled(reader)
+        print('serving client:', argstring)
         try:
             async with obj_lock:
-                table = main(args, agendamaker=agenda, objs=objs)
+                table = parse_args(argstring, agendamaker=agenda, objs=objs)
         except Exception as e:
             table = [str(e)]
         write_pickled(writer, table)
@@ -753,10 +757,10 @@ def server():
             pass
         exit(1)
     asyncio.run(start_server())
-def client(args):
+def client(argstring):
     async def do_client():
         reader, writer = await asyncio.open_unix_connection(SOCK)
-        write_pickled(writer, args)
+        write_pickled(writer, argstring)
         await writer.drain()
         table = await read_pickled(reader)
         writer.close()
@@ -764,45 +768,26 @@ def client(args):
         return table
     return asyncio.run(do_client())
 
-def main(args=None, agendamaker=None, objs=None):
-    if args is None:
-        import argparse
-        parser = argparse.ArgumentParser()
-        parser.add_argument('-4', '--force-ipv4', action='store_true', help="force IPv4 sockets")
-        parser.add_argument('-d', '--download-loop', action='store_true', help="don't print anything, just refresh the calendar cache")
-        parser.add_argument('--serve', action='store_true', help="start server")
-        parser.add_argument('--client', action='store_const', const=1, help="run as client")
-        parser.add_argument('-n', '--no-download', action='store_true', help="don't attempt to refresh the calendar cache")
-        parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
-        parser.add_argument('-c', '--calendar', metavar='CALENDAR', action='append', help='restrict to specified calendar(s)')
-        parser.add_argument('-i', '--interval', metavar='MINUTES', action='store', type=int, default=15, help='interval for default/week view')
-        parser.add_argument('-l', '--list-calendar', action='store_true', help='print a list of events')
-        parser.add_argument('-R', '--no-recurring', action='store_true', help='do not print recurring events in list')
-        parser.add_argument('-x', '--four-week', action='store_true', help='print a four-week diagram')
-        parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
-        parser.add_argument('-w', '--week-view', metavar='N', nargs='?', const=0, type=int, help='print a multi-day view (of N days)')
-        parser.add_argument('-m', '--inner-width', metavar='N', type=int, help='inner width for week view')
-        parser.add_argument('date', nargs='*', help='use this date instead of today')
-        args = parser.parse_args(args)
-    if args.force_ipv4:
-        ipv4_monkey_patch()
-    no_download = args.no_download and not args.force_download_check
+def parse_args(argstring=None, agendamaker=None, objs=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-d', '--download-loop', action='store_true', help="don't print anything, just refresh the calendar cache")
+    parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
+    parser.add_argument('-c', '--calendar', metavar='CALENDAR', action='append', help='restrict to specified calendar(s)')
+    parser.add_argument('-i', '--interval', metavar='MINUTES', action='store', type=int, default=15, help='interval for default/week view')
+    parser.add_argument('-l', '--list-calendar', action='store_true', help='print a list of events')
+    parser.add_argument('-R', '--no-recurring', action='store_true', help='do not print recurring events in list')
+    parser.add_argument('-x', '--four-week', action='store_true', help='print a four-week diagram')
+    parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
+    parser.add_argument('-w', '--week-view', metavar='N', nargs='?', const=0, type=int, help='print a multi-day view (of N days)')
+    parser.add_argument('-m', '--inner-width', metavar='N', type=int, help='inner width for week view')
+    parser.add_argument('date', nargs='*', help='use this date instead of today')
+    args = parser.parse_args(argstring)
+
     if args.download_loop:
-        load_evts(print_warning=True)
+        download_evts(datetime.combine(date.today(), time(0), tzlocal()))
         print('loaded ok:', datetime.now())
         exit(0)
-    if args.serve:
-        server()
-        exit(0)
-    elif args.client == 1:
-        args.client = 2
-        return client(args)
-    if args.date:
-        import parsedatetime
-        pdt = parsedatetime.Calendar()
-        aday = datetime(*pdt.parse(' '.join(args.date))[0][:6]).date()
-    else:
-        aday = date.today()
+
     modes = 0
     modes += args.list_calendar
     modes += args.four_week
@@ -810,24 +795,48 @@ def main(args=None, agendamaker=None, objs=None):
     if modes > 1:
         print("error: cannot specify more than one major mode", file=sys.stderr)
         exit(1)
+
+    if args.date:
+        import parsedatetime
+        pdt = parsedatetime.Calendar()
+        aday = datetime(*pdt.parse(' '.join(args.date))[0][:6]).date()
+    else:
+        aday = date.today()
+
     if objs is None:
-        objs = load_evts(aday, no_download=args.no_download)
+        objs = load_evts()
+
     if args.list_calendar:
         table = listcal(aday, args.calendar, no_recurring=args.no_recurring, objs=objs)
-        return table
     elif args.four_week:
-        fourweek(aday, args.calendar, no_download=no_download, zero_offset=args.zero_offset)
-        exit(0)
+        table = fourweek(aday, args.calendar, zero_offset=args.zero_offset)
     elif args.week_view is not None:
-        weekview(aday, args.week_view, args.calendar, no_download=no_download, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, inner_width=args.inner_width)
-        exit(0)
-    if agendamaker is None:
-        agendamaker = Agenda(args.calendar, objs=objs, interval=args.interval)
-    table = agendamaker.agenda_table(aday)
-    if not agendamaker.has_later and not args.date:
-        aday = date.today() + t(days=1)
-        table += agendamaker.agenda_table(aday)
+        table = weekview(aday, args.week_view, args.calendar, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, inner_width=args.inner_width)
+    else:
+        if agendamaker is None:
+            agendamaker = Agenda(args.calendar, objs=objs, interval=args.interval)
+        table = agendamaker.agenda_table(aday)
+        if not agendamaker.has_later and not args.date:
+            aday = date.today() + t(days=1)
+            table += agendamaker.agenda_table(aday, print_warning=False)
     return table
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-4', '--force-ipv4', action='store_true', help="force IPv4 sockets")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--server', action='store_true', help="start server")
+    group.add_argument('--client', action='store_true', help="run as client")
+    args, remainder = parser.parse_known_args()
+    if args.force_ipv4:
+        ipv4_monkey_patch()
+    if args.server:
+        server()
+        exit(0)
+    elif args.client:
+        return client(remainder)
+    else:
+        return parse_args(remainder)
 
 if __name__ == '__main__':
     table = main()
