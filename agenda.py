@@ -5,6 +5,7 @@ import re
 import sys
 import yaml
 import pickle
+import hashlib
 import argparse
 
 from collections import Counter, OrderedDict, defaultdict as ddict
@@ -143,7 +144,6 @@ def filter_calendars(obj, calendars):
             lookup = allCals.get(calendar)
             if lookup is None:
                 print('Error: unknown calendar:', calendar, file=sys.stderr)
-                exit(1)
             _getCal(lookup)
         else:
             callist.append(calendar)
@@ -169,12 +169,13 @@ def download_evts(refdate):
             ev.calendar = calId
             evs.append(ev)
     evs.sort(key=lambda e: (as_datetime(e.start), reversor(as_datetime(e.end))))
+    digest = hashlib.blake2b(yaml.dump(evs, canonical=True).encode()).digest()
     obj = {'events': evs, 'calendars': cals, 'timestamp': now}
     with open('evts.yaml', 'w') as f:
         yaml.dump(obj, f, default_flow_style=False)
     with open('evts.pickle', 'wb') as f:
         pickle.dump(obj, f, protocol=-1)
-    return obj
+    return obj, digest
 
 def string_outofdate(obj, now=None):
     if not now:
@@ -183,12 +184,15 @@ def string_outofdate(obj, now=None):
         return fg(3) + 'Warning: timestamp is out of date by ' + tdtime(now - obj['timestamp']) + RESET
     return None
 
-def load_evts(*, print_warning=False):
+def load_evts(*, print_warning=False, digested=False):
     now = datetime.now(tzlocal())
+    digest = None
     try:
         try:
             with open('evts.pickle', 'rb') as f:
                 obj = pickle.load(f)
+            if digested:
+                digest = hashlib.blake2b(yaml.dump(obj['events'], canonical=True).encode()).digest()
         except FileNotFoundError:
             with open('evts.yaml') as f:
                 obj = yaml.full_load(f)
@@ -198,7 +202,6 @@ def load_evts(*, print_warning=False):
                 evt.end = localize(evt.end)
         if obj['timestamp'] > now:
             print(obj['timestamp'])
-            exit(1)
         elif obj['timestamp'] + t(minutes=5) < now:
             if print_warning:
                 print('timestamp out of date', file=sys.stderr)
@@ -206,8 +209,10 @@ def load_evts(*, print_warning=False):
         raise
 
     evt2short = make_evt2short(obj)
-
+    if digested:
+        return (obj, evt2short), digest
     return obj, evt2short
+
 def make_evt2short(obj):
     cal2short = {}
     cal2dark = {}
@@ -713,23 +718,31 @@ def server():
         # not a race since we check again later
         raise Exception(SOCK + ' already exists')
     obj_lock = asyncio.Lock()
-    objs = load_evts(print_warning=True)
+    objs, lasthash = load_evts(print_warning=True, digested=True)
     agenda = Agenda(None, objs=objs)
+
     async def download_loop():
         nonlocal objs
         nonlocal agenda
+        nonlocal lasthash
         while True:
-            async with obj_lock:
-                objs = load_evts(print_warning=True)
-                agenda = Agenda(None, objs=objs)
-            print('loaded ok:', datetime.now())
+            try:
+                print('downloading...')
+                async with obj_lock:
+                    obj, thishash = download_evts(datetime.combine(date.today(), time(0), tzlocal()))
+                    evt2short = make_evt2short(obj)
+                    agenda = Agenda(None, objs=(obj, evt2short))
+                print('loaded ok:', datetime.now(), lasthash == thishash)
+                lasthash = thishash
+            except Exception as e:
+                print('download loop:', e)
             await asyncio.sleep(5*60)
     async def handle_connection(reader, writer):
-        argstring = await read_pickled(reader)
-        print('serving client:', argstring)
+        argv = await read_pickled(reader)
+        print('serving client:', argv)
         try:
             async with obj_lock:
-                table = parse_args(argstring, agendamaker=agenda, objs=objs)
+                table = parse_args(argv, agendamaker=agenda, objs=objs)
         except Exception as e:
             table = [str(e)]
         write_pickled(writer, table)
@@ -757,10 +770,10 @@ def server():
             pass
         exit(1)
     asyncio.run(start_server())
-def client(argstring):
+def client(argv):
     async def do_client():
         reader, writer = await asyncio.open_unix_connection(SOCK)
-        write_pickled(writer, argstring)
+        write_pickled(writer, argv)
         await writer.drain()
         table = await read_pickled(reader)
         writer.close()
@@ -768,9 +781,8 @@ def client(argstring):
         return table
     return asyncio.run(do_client())
 
-def parse_args(argstring=None, agendamaker=None, objs=None):
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-d', '--download-loop', action='store_true', help="don't print anything, just refresh the calendar cache")
+def parse_args(argv, agendamaker=None, objs=None):
+    parser = argparse.ArgumentParser(exit_on_error=False)
     parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
     parser.add_argument('-c', '--calendar', metavar='CALENDAR', action='append', help='restrict to specified calendar(s)')
     parser.add_argument('-i', '--interval', metavar='MINUTES', action='store', type=int, default=15, help='interval for default/week view')
@@ -781,20 +793,16 @@ def parse_args(argstring=None, agendamaker=None, objs=None):
     parser.add_argument('-w', '--week-view', metavar='N', nargs='?', const=0, type=int, help='print a multi-day view (of N days)')
     parser.add_argument('-m', '--inner-width', metavar='N', type=int, help='inner width for week view')
     parser.add_argument('date', nargs='*', help='use this date instead of today')
-    args = parser.parse_args(argstring)
-
-    if args.download_loop:
-        download_evts(datetime.combine(date.today(), time(0), tzlocal()))
-        print('loaded ok:', datetime.now())
-        exit(0)
+    args, remain = parser.parse_known_args(argv)
+    if remain:
+        raise Exception('unrecognized arguments: {}'.format(' '.join(remain)))
 
     modes = 0
     modes += args.list_calendar
     modes += args.four_week
     modes += args.week_view is not None
     if modes > 1:
-        print("error: cannot specify more than one major mode", file=sys.stderr)
-        exit(1)
+        return ["error: cannot specify more than one major mode"]
 
     if args.date:
         import parsedatetime
@@ -825,12 +833,19 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-4', '--force-ipv4', action='store_true', help="force IPv4 sockets")
     group = parser.add_mutually_exclusive_group()
+    group.add_argument('-d', '--download-only', action='store_true', help="don't print anything, just refresh the calendar cache")
     group.add_argument('--server', action='store_true', help="start server")
     group.add_argument('--client', action='store_true', help="run as client")
     args, remainder = parser.parse_known_args()
+
     if args.force_ipv4:
         ipv4_monkey_patch()
-    if args.server:
+
+    if args.download_only:
+        download_evts(datetime.combine(date.today(), time(0), tzlocal()))
+        print('loaded ok:', datetime.now())
+        exit(0)
+    elif args.server:
         server()
         exit(0)
     elif args.client:

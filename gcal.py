@@ -1,34 +1,12 @@
-import http.server
-import httplib2
-import googleapiclient.discovery as discovery
 from datetime import date, datetime, timedelta as t
-from dateutil import rrule
 from dateutil.parser import parse as dateparse
-from dateutil.tz import tzlocal
-#from oauth2client import client
-#from oauth2client.file import Storage
-import google.auth
-import google.oauth2
-from google_auth_oauthlib.flow import InstalledAppFlow
 import json
-from urllib.parse import urlparse, parse_qs
 import sys
 import re
 
 
-global code
-
-class TokenHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        global code
-        code = parse_qs(urlparse(self.path).query)['code'][0]
-        self.send_response(200)
-        self.end_headers()
-    def log_message(self, format, *args):
-        return
-
-
 def new_auth(filename, scope='https://www.googleapis.com/auth/calendar'):
+    from google_auth_oauthlib.flow import InstalledAppFlow
     try:
         flow = InstalledAppFlow.from_client_secrets_file(
             'client_secret.json',
@@ -53,6 +31,8 @@ def new_auth(filename, scope='https://www.googleapis.com/auth/calendar'):
     return credentials
 
 def get_http_auth(filename):
+    import google.auth.transport.requests
+    import google.oauth2.credentials
     try:
         with open(filename) as f:
             info = json.load(f)
@@ -74,6 +54,7 @@ global http_auth
 global service
 service = None
 def load_http_auth():
+    import googleapiclient.discovery as discovery
     global http_auth, service
     http_auths = None
     services = None
