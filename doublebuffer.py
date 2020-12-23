@@ -6,11 +6,15 @@ import re
 import subprocess
 import time
 import datetime
+import signal
 
 HIDE_CURSOR = '\033[?25l'
 SHOW_CURSOR = '\033[?25h'
 CLEAR_TERM = '\033[H'
 RESET = '\033[0m'
+
+def sigwinchange_handler(*args):
+    raise InterruptedError
 
 def tokenize(line):
     chars = list(line)
@@ -58,65 +62,75 @@ def do(args):
         cmd = f'bash -ic "{quote(cmd)}"'
     if args.pseudo_terminal:
         cmd = f'script -qec "{quote(cmd)}" /dev/null'
+    template_cmd = cmd
+    signal.signal(signal.SIGWINCH, sigwinchange_handler)
     while True:
-        capture = subprocess.run(cmd, shell=True, capture_output=True)
-        lines = capture.stdout.decode().replace('\r\n', '\n').split('\n')
-        lines += capture.stderr.decode().replace('\r\n', '\n').split('\n')
-        while lines and (not lines[-1] or lines[-1].isspace()):
-            lines.pop()
+        try:
+            termsize = os.get_terminal_size()
+            cmd = template_cmd
+            cmd = cmd.replace('%W', str(termsize.columns))
+            cmd = cmd.replace('%H', str(termsize.lines))
 
-        termsize = os.get_terminal_size()
-        tokenlines = [tokenize(line) for line in lines]
-        lines = linesplit(tokenlines, termsize.columns)
+            capture = subprocess.run(cmd, shell=True, capture_output=True)
+            lines = capture.stdout.decode().replace('\r\n', '\n').split('\n')
+            lines += capture.stderr.decode().replace('\r\n', '\n').split('\n')
+            while lines and (not lines[-1] or lines[-1].isspace()):
+                lines.pop()
 
-        more = len(lines) > termsize.lines
-        if more:
-            lastline = tokenize(lines[termsize.lines - 1])
-            lines = lines[:termsize.lines - 1]
-            moretext = format('...XmoreX...', f'^{termsize.columns}')[:termsize.columns]
-            start = 0
-            while moretext[start].isspace():
-                start += 1
-            end = len(moretext) - 1
-            while moretext[end-1].isspace():
-                end -= 1
-            moretext = moretext.replace('X', ' ')
-            i = 0
-            text = ''
-            lastcode = RESET
-            while i < start:
-                token = lastline.pop(0)
-                text += token
-                if token.startswith('\033'):
-                    lastcode = token
-                else:
-                    i += 1
-            # dark blue
-            text += '\033[38;5;24m'
-            while i < end:
-                text += moretext[i]
-                i += 1
-                token = lastline.pop(0)
-                while token.startswith('\033'):
-                    lastcode = token
+            tokenlines = [tokenize(line) for line in lines]
+            lines = linesplit(tokenlines, termsize.columns)
+
+
+            more = len(lines) > termsize.lines
+            if more:
+                lastline = tokenize(lines[termsize.lines - 1])
+                lines = lines[:termsize.lines - 1]
+                moretext = format('...XmoreX...', f'^{termsize.columns}')[:termsize.columns]
+                start = 0
+                while moretext[start].isspace():
+                    start += 1
+                end = len(moretext) - 1
+                while moretext[end-1].isspace():
+                    end -= 1
+                moretext = moretext.replace('X', ' ')
+                i = 0
+                text = ''
+                lastcode = RESET
+                while i < start:
                     token = lastline.pop(0)
-            text += lastcode
-            text += ''.join(lastline)
-            lines.append(text)
+                    text += token
+                    if token.startswith('\033'):
+                        lastcode = token
+                    else:
+                        i += 1
+                # dark blue
+                text += '\033[38;5;24m'
+                while i < end:
+                    text += moretext[i]
+                    i += 1
+                    token = lastline.pop(0)
+                    while token.startswith('\033'):
+                        lastcode = token
+                        token = lastline.pop(0)
+                text += lastcode
+                text += ''.join(lastline)
+                lines.append(text)
 
-        print(CLEAR_TERM, end='')
-        print('\n'.join(lines), end=RESET)
-        for i in range(len(lines), termsize.lines):
-            print('\n' + ' ' * termsize.columns, end=RESET)
-        if args.on_minute:
-            now = datetime.datetime.now()
-            elapsed = now.minute % args.on_minute
-            elapsed *= 60
-            elapsed += now.second + now.microsecond / (10**6)
-            remainder = args.on_minute * 60 - elapsed
-            time.sleep(remainder)
-        else:
-            time.sleep(args.interval)
+            print(CLEAR_TERM, end='')
+            print('\n'.join(lines), end=RESET)
+            for i in range(len(lines), termsize.lines):
+                print('\n' + ' ' * termsize.columns, end=RESET)
+            if args.on_minute:
+                now = datetime.datetime.now()
+                elapsed = now.minute % args.on_minute
+                elapsed *= 60
+                elapsed += now.second + now.microsecond / (10**6)
+                remainder = args.on_minute * 60 - elapsed
+                time.sleep(remainder)
+            else:
+                time.sleep(args.interval)
+        except InterruptedError:
+            continue
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
