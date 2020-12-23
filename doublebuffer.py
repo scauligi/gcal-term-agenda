@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+import datetime
 
 HIDE_CURSOR = '\033[?25l'
 SHOW_CURSOR = '\033[?25h'
@@ -61,7 +62,7 @@ def do(args):
         capture = subprocess.run(cmd, shell=True, capture_output=True)
         lines = capture.stdout.decode().replace('\r\n', '\n').split('\n')
         lines += capture.stderr.decode().replace('\r\n', '\n').split('\n')
-        while not lines[-1] or lines[-1].isspace():
+        while lines and (not lines[-1] or lines[-1].isspace()):
             lines.pop()
 
         termsize = os.get_terminal_size()
@@ -107,15 +108,28 @@ def do(args):
         print('\n'.join(lines), end=RESET)
         for i in range(len(lines), termsize.lines):
             print('\n' + ' ' * termsize.columns, end=RESET)
-        time.sleep(args.interval)
+        if args.on_minute:
+            now = datetime.datetime.now()
+            elapsed = now.minute % args.on_minute
+            elapsed *= 60
+            elapsed += now.second + now.microsecond / (10**6)
+            remainder = args.on_minute * 60 - elapsed
+            time.sleep(remainder)
+        else:
+            time.sleep(args.interval)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--interval', metavar='seconds', action='store', type=int, default=5, help='seconds to wait between updates')
+    parser.add_argument('-N', '--on-minute', metavar='minute(s)', action='store', type=int, help='update every N minutes on the minute')
     parser.add_argument('-t', '--pseudo-terminal', action='store_true', help='run command using `script` to fake a TTY')
     parser.add_argument('-i', '--interactive-shell', action='store_true', help='run command using `bash -i`')
     parser.add_argument('command')
     args = parser.parse_args()
+    if args.on_minute:
+        if 60 % args.on_minute:
+            print('no')
+            exit(1)
     print(HIDE_CURSOR, end='')
     try:
         do(args)
