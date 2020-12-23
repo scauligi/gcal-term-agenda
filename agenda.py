@@ -458,7 +458,7 @@ DASH = "─"
 PIPE = "│"
 THICK = "█"
 
-def fourweek(todate, calendars, zero_offset=False):
+def fourweek(todate, calendars, objs=None, zero_offset=False):
     termsize = os.get_terminal_size()
 
     table_width = 7
@@ -501,7 +501,7 @@ def fourweek(todate, calendars, zero_offset=False):
     table.pop()
     table.append(do_row(DASH, *CORNERS[2]))
 
-    obj, _evt2short = load_evts()
+    obj, _evt2short = objs
     now = datetime.now(tzlocal())
     nowdate = now.date()
     def evt2short(evt):
@@ -600,7 +600,7 @@ def fourweek(todate, calendars, zero_offset=False):
         newtable[0] = newtable[0][:offset] + outofdate + newtable[0][:codelen] + newtable[0][blen(outofdate)+offset:]
     return newtable
 
-def weekview(todate, ndays, calendars, dark_recurring=False, zero_offset=False, interval=15, inner_width=None):
+def weekview(todate, ndays, calendars, objs=None, dark_recurring=False, zero_offset=False, interval=15, inner_width=None):
     from doublebuffer import tokenize
     table_width = ndays if ndays > 0 else 7
     timecol = len(ftime() + '  ')
@@ -670,7 +670,6 @@ def weekview(todate, ndays, calendars, dark_recurring=False, zero_offset=False, 
         if zero_offset:
             offset = (offset - 1) % 7
     start = todate - t(days=offset)
-    objs = load_evts()
     agendamaker = Agenda(calendars, objs=objs, dark_recurring=dark_recurring, interval=interval)
     table = agendamaker.agenda_table(start, ndays=table_width)
     newtable = []
@@ -724,6 +723,7 @@ def server():
     async def download_loop():
         nonlocal objs
         nonlocal agenda
+        nonlocal obj_lock
         nonlocal lasthash
         while True:
             try:
@@ -731,13 +731,17 @@ def server():
                 async with obj_lock:
                     obj, thishash = download_evts(datetime.combine(date.today(), time(0), tzlocal()))
                     evt2short = make_evt2short(obj)
-                    agenda = Agenda(None, objs=(obj, evt2short))
+                    objs = (obj, evt2short)
+                    agenda = Agenda(None, objs=objs)
                 print('loaded ok:', datetime.now(), lasthash == thishash)
                 lasthash = thishash
             except Exception as e:
                 print('download loop:', e)
             await asyncio.sleep(5*60)
     async def handle_connection(reader, writer):
+        nonlocal objs
+        nonlocal agenda
+        nonlocal obj_lock
         argv = await read_pickled(reader)
         print('serving client:', argv)
         try:
@@ -817,9 +821,9 @@ def parse_args(argv, agendamaker=None, objs=None):
     if args.list_calendar:
         table = listcal(aday, args.calendar, no_recurring=args.no_recurring, objs=objs)
     elif args.four_week:
-        table = fourweek(aday, args.calendar, zero_offset=args.zero_offset)
+        table = fourweek(aday, args.calendar, zero_offset=args.zero_offset, objs=objs)
     elif args.week_view is not None:
-        table = weekview(aday, args.week_view, args.calendar, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, inner_width=args.inner_width)
+        table = weekview(aday, args.week_view, args.calendar, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, inner_width=args.inner_width, objs=objs)
     else:
         if agendamaker is None:
             agendamaker = Agenda(args.calendar, objs=objs, interval=args.interval)
