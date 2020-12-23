@@ -5,6 +5,7 @@ import re
 import sys
 import yaml
 import pickle
+import sqlite3
 import argparse
 
 from collections import Counter, OrderedDict, defaultdict as ddict
@@ -173,6 +174,25 @@ def download_evts(refdate):
         yaml.dump(obj, f, default_flow_style=False)
     with open('evts.pickle', 'wb') as f:
         pickle.dump(obj, f, protocol=-1)
+    db = sqlite3.connect('evts.sqlite3')
+    db.execute("""
+create table if not exists events
+    (id PRIMARY KEY, start, end, isdate BOOL, summary, location, blob)
+""")
+    for ev in evs:
+        db.execute("""
+insert into events
+values (:id, :start, :end, :isdate, :summary, :location, :blob)
+on conflict(id) do update set start=:start, end=:end, isdate=:isdate, summary=:summary, blob=:blob
+        """, {
+            'id': ev._e['id'],
+            'start': ev.start,
+            'end': ev.end,
+            'isdate': not isinstance(ev.start, datetime),
+            'summary': ev.summary,
+            'location': ev.location,
+            'blob': pickle.dumps(ev, protocol=-1)})
+    db.commit()
     return obj
 
 def string_outofdate(obj, now=None):
@@ -203,6 +223,8 @@ def load_evts(*, print_warning=False):
     except FileNotFoundError:
         raise
 
+    obj['db'] = sqlite3.connect('file:evts.sqlite3?mode=ro', uri=True)
+
     evt2short = make_evt2short(obj)
     return obj, evt2short
 
@@ -227,8 +249,6 @@ def make_evt2short(obj):
 class Agenda:
     def __init__(self, calendars, objs=None, dark_recurring=False, interval=15):
         self.now = datetime.now(tzlocal())
-        if objs is None:
-            objs = load_evts(print_warning=False)
         self.obj, evt2short = objs
         def _evt2short(evt):
             if as_date(evt.start) > as_date(self.now):
@@ -258,22 +278,28 @@ class Agenda:
             bigcol[None] = []
             self.table.append(bigcol)
 
-        enddate = self.todate + t(days=actual_ndays)
+        events = []
+        rows = self.obj['db'].execute("""
+              select blob from events
+              where
+                (isdate = 1 and not
+                    ((date(start) < date(:todate) and date(end) <= date(:todate))
+                     or (date(start) >= date(:todate, "+" || :ndays || " days") and date(end) > date(:todate, "+" || :ndays || " days"))))
+            or (isdate = 0 and not
+                  ((datetime(start) < datetime(:today) and datetime(end) <= datetime(:today))
+                  or (datetime(start) >= datetime(:today, "+" || :ndays || " days")
+                            and datetime(end) >= datetime(:today, "+" || :ndays || " days"))))
+        """, {'todate': self.todate, 'today': self.today, 'ndays': actual_ndays})
+        for row in rows:
+            evt = pickle.loads(row[0])
+            events.append(evt)
 
         presort = []
-        for evt in self.obj['events']:
+        for evt in events:
             if evt.calendar not in self.callist:
                 continue
             if evt.cancelled:
                 continue
-            start = as_date(evt.start)
-            end = as_date(evt.end)
-            if not isinstance(evt.end, datetime) and evt.end == self.todate:
-                continue
-            if end < self.todate:
-                continue
-            elif start >= enddate:
-                break
             presort.append(evt)
         zero_time = time()
         def _presort_key(evt):
@@ -286,6 +312,8 @@ class Agenda:
         self.timefield = ''
         for evt in presort:
             index = max((as_date(evt.start) - self.todate).days, 0) + 1
+            if index >= len(self.table):
+                print(index, evt.start)
             if not isinstance(evt.start, datetime):
                 dateline = evt.summary
                 dateline = fg(self.evt2short(evt)) + dateline
@@ -711,33 +739,31 @@ def server():
         raise Exception(SOCK + ' already exists')
     obj_lock = asyncio.Lock()
     objs = load_evts(print_warning=True)
-    agenda = Agenda(None, objs=objs)
+    db = objs[0]['db']
 
     async def download_loop():
         nonlocal objs
-        nonlocal agenda
         nonlocal obj_lock
         while True:
             try:
                 print(datetime.now(), 'downloading...')
                 async with obj_lock:
                     obj = download_evts(datetime.combine(date.today(), time(0), tzlocal()))
+                    obj['db'] = db
                     evt2short = make_evt2short(obj)
                     objs = (obj, evt2short)
-                    agenda = Agenda(None, objs=objs)
                 print(datetime.now(), 'loaded ok')
             except Exception as e:
                 print('download loop:', e)
             await asyncio.sleep(5*60)
     async def handle_connection(reader, writer):
         nonlocal objs
-        nonlocal agenda
         nonlocal obj_lock
         argv = await read_pickled(reader)
         print(datetime.now(), 'serving client:', argv)
         try:
             async with obj_lock:
-                table = parse_args(argv, agendamaker=agenda, objs=objs)
+                table = parse_args(argv, objs=objs)
         except Exception as e:
             table = [str(e)]
         write_pickled(writer, table)
@@ -776,7 +802,7 @@ def client(argv):
         return table
     return asyncio.run(do_client())
 
-def parse_args(argv, agendamaker=None, objs=None):
+def parse_args(argv, objs=None):
     parser = argparse.ArgumentParser(exit_on_error=False)
     parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
     parser.add_argument('-c', '--calendar', metavar='CALENDAR', action='append', help='restrict to specified calendar(s)')
@@ -816,8 +842,7 @@ def parse_args(argv, agendamaker=None, objs=None):
     elif args.week_view is not None:
         table = weekview(aday, args.week_view, args.calendar, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, inner_width=args.inner_width, objs=objs)
     else:
-        if agendamaker is None:
-            agendamaker = Agenda(args.calendar, objs=objs, interval=args.interval)
+        agendamaker = Agenda(args.calendar, objs=objs, interval=args.interval)
         table = agendamaker.agenda_table(aday)
         if not agendamaker.has_later and not args.date:
             aday = date.today() + t(days=1)
