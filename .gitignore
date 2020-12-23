@@ -4,5 +4,6 @@ __pycache__
 venv
 evts.yaml
 evts.pickle
+evts.sqlite3
 client_secret.json
 calendars.yaml

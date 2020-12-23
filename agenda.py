@@ -85,10 +85,10 @@ def tdtime(td):
         s += 's' if minutes != 1 else ''
     return s
 
-def as_date(date_or_datetime):
+def as_date(date_or_datetime, endtime=False):
     if isinstance(date_or_datetime, datetime):
         return date_or_datetime.date()
-    return date_or_datetime
+    return date_or_datetime - t(days=int(endtime))
 
 def as_datetime(date_or_datetime):
     if isinstance(date_or_datetime, date) and not isinstance(date_or_datetime, datetime):
@@ -175,23 +175,27 @@ def download_evts(refdate):
     with open('evts.pickle', 'wb') as f:
         pickle.dump(obj, f, protocol=-1)
     db = sqlite3.connect('evts.sqlite3')
-    db.execute("""
-create table if not exists events
-    (id PRIMARY KEY, start, end, isdate BOOL, summary, location, blob)
-""")
-    for ev in evs:
-        db.execute("""
-insert into events
-values (:id, :start, :end, :isdate, :summary, :location, :blob)
-on conflict(id) do update set start=:start, end=:end, isdate=:isdate, summary=:summary, blob=:blob
-        """, {
+    def ev_entry(ev):
+        return {
             'id': ev._e['id'],
             'start': ev.start,
             'end': ev.end,
-            'isdate': not isinstance(ev.start, datetime),
             'summary': ev.summary,
             'location': ev.location,
-            'blob': pickle.dumps(ev, protocol=-1)})
+            'startdate': as_date(ev.start),
+            'enddate': as_date(ev.end, endtime=True),
+            'cancelled': ev.cancelled,
+            'calendar': ev.calendar,
+            'hastime': isinstance(ev.start, datetime),
+            'blob': pickle.dumps(ev, protocol=-1),
+        }
+    keys = list(ev_entry(evs[0]).keys())[1:]
+    db.execute(f'create table if not exists events (id PRIMARY KEY,{",".join(keys)})')
+    for ev in evs:
+        entry = ev_entry(ev)
+        keys = list(entry.keys())
+        db.execute(f'''insert into events values ({",".join(f":{key}" for key in keys)})
+                on conflict(id) do update set {",".join(f"{key}=:{key}" for key in keys[1:])}''', entry)
     db.commit()
     return obj
 
@@ -246,6 +250,27 @@ def make_evt2short(obj):
         return cal2short[evt.calendar]
     return evt2short
 
+def get_events(obj, todate, ndays, callist):
+    events = []
+    if ndays >= 0:
+        todates = (todate, todate, ndays)
+        ndays_clause = 'and date(startdate) < date(?, "+" || ? || " days")'
+    else:
+        todates = (todate,)
+        ndays_clause = ''
+    callist = list(set(callist))
+    rows = obj['db'].execute(f"""
+          select blob from events
+          where
+                date(enddate) >= date(?)
+                 {ndays_clause}
+             and not cancelled
+             and calendar in ({','.join("?"*len(callist))})
+            order by startdate, hastime, datetime(start)
+    """, (*todates,
+          *callist))
+    return [pickle.loads(row[0]) for row in rows]
+
 class Agenda:
     def __init__(self, calendars, objs=None, dark_recurring=False, interval=15):
         self.now = datetime.now(tzlocal())
@@ -278,39 +303,11 @@ class Agenda:
             bigcol[None] = []
             self.table.append(bigcol)
 
-        events = []
-        rows = self.obj['db'].execute("""
-              select blob from events
-              where
-                (isdate = 1 and not
-                    ((date(start) < date(:todate) and date(end) <= date(:todate))
-                     or (date(start) >= date(:todate, "+" || :ndays || " days") and date(end) > date(:todate, "+" || :ndays || " days"))))
-            or (isdate = 0 and not
-                  ((datetime(start) < datetime(:today) and datetime(end) <= datetime(:today))
-                  or (datetime(start) >= datetime(:today, "+" || :ndays || " days")
-                            and datetime(end) >= datetime(:today, "+" || :ndays || " days"))))
-        """, {'todate': self.todate, 'today': self.today, 'ndays': actual_ndays})
-        for row in rows:
-            evt = pickle.loads(row[0])
-            events.append(evt)
-
-        presort = []
-        for evt in events:
-            if evt.calendar not in self.callist:
-                continue
-            if evt.cancelled:
-                continue
-            presort.append(evt)
-        zero_time = time()
-        def _presort_key(evt):
-            if isinstance(evt.start, datetime):
-                return ((1, evt.start.time()), evt.start.date())
-            return ((0, zero_time), evt.start)
-        presort.sort(key=_presort_key)
+        events = get_events(self.obj, self.todate, actual_ndays, self.callist)
 
         self.did_first = False
         self.timefield = ''
-        for evt in presort:
+        for evt in events:
             index = max((as_date(evt.start) - self.todate).days, 0) + 1
             if index >= len(self.table):
                 print(index, evt.start)
@@ -438,36 +435,33 @@ def listcal(todate, calendars, no_recurring=False, objs=None):
         (follmonth,                         '== THE FUTURE =='),
     ]
 
+    events = get_events(obj, todate, -1, callist)
+
     seen = Counter()
-    for evt in obj['events']:
-        if evt.calendar not in callist:
-            continue
-        if evt.cancelled:
-            continue
+    for evt in events:
         if no_recurring and evt.recurring:
             continue
         start = as_datetime(evt.start)
         end = as_datetime(evt.end)
-        if end > today:
-            seen[evt.uid] += 1
-            if seen[evt.uid] > 1:
-                continue
-            s = None
-            while highwater and (highwater[0][0] is None or start >= highwater[0][0]):
-                _, s = highwater.pop(0)
-            if s:
-                table.append(fg(4) + s + RESET)
-            dark = isinstance(evt.end, datetime) and evt.end < now
-            white = fg(8) if dark else ''
-            fmt = '  '
-            fmt += white + dtime(evt.start) + RESET
-            fmt += ' '
-            fmt += white + ftime(evt.start if isinstance(evt.start, datetime) else None)
-            fmt += ' '
-            fmt += fg(evt2short(evt, dark=dark)) + evt.summary + RESET
-            fmt += ' '
-            fmt += white + tdtime(evt.end - evt.start) + RESET
-            table.append(fmt)
+        seen[evt.uid] += 1
+        if seen[evt.uid] > 1:
+            continue
+        s = None
+        while highwater and (highwater[0][0] is None or start >= highwater[0][0]):
+            _, s = highwater.pop(0)
+        if s:
+            table.append(fg(4) + s + RESET)
+        dark = isinstance(evt.end, datetime) and evt.end < now
+        white = fg(8) if dark else ''
+        fmt = '  '
+        fmt += white + dtime(evt.start) + RESET
+        fmt += ' '
+        fmt += white + ftime(evt.start if isinstance(evt.start, datetime) else None)
+        fmt += ' '
+        fmt += fg(evt2short(evt, dark=dark)) + evt.summary + RESET
+        fmt += ' '
+        fmt += white + tdtime(evt.end - evt.start) + RESET
+        table.append(fmt)
     return table
 
 
@@ -546,15 +540,13 @@ def fourweek(todate, calendars, objs=None, zero_offset=False):
             text = text[:inner_width-1] + '⋯'
         return f'{text:<{inner_width}}'
 
+    calstart = todate - t(days=offset)
+    events = get_events(obj, todate - t(days=offset), 4 * 7, callist)
+
     for evt in obj['events']:
-        if evt.calendar not in callist:
-            continue
-        if evt.cancelled:
-            continue
         start = as_datetime(evt.start)
         end = as_datetime(evt.end)
-        cellnum = (start.date() - todate).days
-        cellnum += offset
+        cellnum = (start.date() - calstart).days
         if cellnum in range(0, len(cells)):
             if isinstance(evt.start, datetime):
                 text = ftime(evt.start) + ' ' + evt.summary
@@ -565,7 +557,7 @@ def fourweek(todate, calendars, objs=None, zero_offset=False):
             cells[cellnum][choice(evt)].append(text)
         if not isinstance(evt.start, datetime) and (end - start).days > 1:
             for day in range(1, (evt.end - evt.start).days):
-                cellnum = (start.date() - todate).days + offset + day
+                cellnum = (start.date() - calstart).days + day
                 if cellnum in range(0, len(cells)):
                     text = '> ' + evt.summary
                     text = shorten(text)
