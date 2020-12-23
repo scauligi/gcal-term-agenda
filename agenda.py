@@ -331,7 +331,7 @@ class Agenda:
 
         self.interval = t(minutes=interval)
 
-    def agenda_table(self, todate, ndays=None, print_warning=True):
+    def agenda_table(self, todate, ndays=None, print_warning=True, forced=False):
         def quantize(thetime):
             minutes = self.interval.seconds // 60
             theminutes = (thetime.hour * 60 + thetime.minute) // minutes * minutes
@@ -367,15 +367,13 @@ class Agenda:
             tock = tick + self.interval
             if not self.table[0][tick.time()]:
                 self.table[0][tick.time()] = ftime(tick)
-            # if self.table[index][tick.time()]:
-            #     self.table[index][tick.time()] += '   '
             if evt.start != tick:
                 endtime = ' ({})'.format(ftime(evt.start).strip())
             if evt.end == evt.start:
                 endtime += ' <-'
             elif evt.end < tock:
                 endtime += ' (-> {})'.format(ftime(evt.end).strip())
-            skip = ndays is None and evt.end <= self.now
+            skip = ndays is None and evt.end <= self.now and not forced
             if evt.end > tock and (not skip):
                 self.has_later = True
                 initial = blen(self.table[index][tick.time()])
@@ -426,7 +424,7 @@ class Agenda:
                 tickt = time(minutes // 60, minutes % 60)
                 tick = datetime.combine(self.todate, tickt, tzinfo=self.today.tzinfo)
                 if not (timefield := self.table[0][tickt]):
-                    if tick < nowtick and not self.table[1][tickt]:
+                    if tick < nowtick and not self.table[1][tickt] and not forced:
                         continue
                     if not did_first and tick != nowtick:
                         continue
@@ -448,7 +446,7 @@ class Agenda:
         print('\n'.join(lines))
 
 
-def listcal(todate, calendars, no_recurring=False, objs=None):
+def listcal(todate, calendars, no_recurring=False, forced=False, objs=None):
     today = datetime.combine(todate, time(0), tzlocal())
     now = datetime.now(tzlocal())
     obj, evt2short = objs
@@ -478,7 +476,7 @@ def listcal(todate, calendars, no_recurring=False, objs=None):
         (follmonth,                         '== THE FUTURE =='),
     ]
 
-    events = get_events(obj, todate, -1, callist)
+    events = get_events(obj, todate, 1 if forced else -1, callist)
 
     seen = Counter()
     for evt in events:
@@ -858,24 +856,26 @@ def parse_args(argv, termsize, objs=None):
         import parsedatetime
         pdt = parsedatetime.Calendar()
         aday = datetime(*pdt.parse(' '.join(args.date))[0][:6]).date()
+        forced = True
     else:
         aday = date.today()
+        forced = False
 
     if objs is None:
         objs = load_evts()
 
     if args.list_calendar:
-        table = listcal(aday, args.calendar, no_recurring=args.no_recurring, objs=objs)
+        table = listcal(aday, args.calendar, no_recurring=args.no_recurring, forced=forced, objs=objs)
     elif args.four_week:
         table = fourweek(aday, args.calendar, termsize=termsize, zero_offset=args.zero_offset, objs=objs)
     elif args.week_view is not None:
         table = weekview(aday, args.week_view, args.calendar, termsize=termsize, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, objs=objs)
     else:
         agendamaker = Agenda(args.calendar, objs=objs, interval=args.interval)
-        table = agendamaker.agenda_table(aday)
-        if not agendamaker.has_later and not args.date:
+        table = agendamaker.agenda_table(aday, forced=forced)
+        if not forced and not agendamaker.has_later:
             aday = date.today() + t(days=1)
-            table += agendamaker.agenda_table(aday, print_warning=False)
+            table += agendamaker.agenda_table(aday, print_warning=False, forced=forced)
     return table
 
 def main():
