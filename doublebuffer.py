@@ -9,8 +9,10 @@ import datetime
 import signal
 
 HIDE_CURSOR = '\033[?25l'
-SHOW_CURSOR = '\033[?25h'
+SWITCH_TO_ALT = '\033[?1049h'
 CLEAR_TERM = '\033[H'
+SWITCH_TO_NORM = '\033[?1049l'
+SHOW_CURSOR = '\033[?25h'
 RESET = '\033[0m'
 
 def sigwinchange_handler(*args):
@@ -144,8 +146,10 @@ if __name__ == '__main__':
         if 60 % args.on_minute:
             print('no')
             exit(1)
-    print(HIDE_CURSOR, end='')
+    print(HIDE_CURSOR, end='', flush=True)
+    print(SWITCH_TO_ALT, end='', flush=True)
     try:
         do(args)
     finally:
+        print(SWITCH_TO_NORM, end='', flush=True)
         print(SHOW_CURSOR, end='', flush=True)
