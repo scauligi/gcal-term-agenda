@@ -8,7 +8,7 @@ import pickle
 import sqlite3
 import argparse
 
-from collections import Counter, OrderedDict, defaultdict as ddict
+from collections import Counter, OrderedDict, defaultdict as ddict, namedtuple
 from datetime import date, datetime, time, timedelta as t, timezone
 from dateutil.tz import tzlocal
 from itertools import zip_longest
@@ -17,6 +17,8 @@ import gcal
 from gcal import Event
 
 from colortrans import rgb2short, short2rgb
+
+TerminalSize = namedtuple('TerminalSize', ['columns', 'lines'])
 
 # https://stackoverflow.com/a/43950235
 # Monkey patch to force IPv4
@@ -309,8 +311,6 @@ class Agenda:
         self.timefield = ''
         for evt in events:
             index = max((as_date(evt.start) - self.todate).days, 0) + 1
-            if index >= len(self.table):
-                print(index, evt.start)
             if not isinstance(evt.start, datetime):
                 dateline = evt.summary
                 dateline = fg(self.evt2short(evt)) + dateline
@@ -473,9 +473,7 @@ DASH = "─"
 PIPE = "│"
 THICK = "█"
 
-def fourweek(todate, calendars, objs=None, zero_offset=False):
-    termsize = os.get_terminal_size()
-
+def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False):
     table_width = 7
     table_height = 4
 
@@ -613,14 +611,11 @@ def fourweek(todate, calendars, objs=None, zero_offset=False):
         newtable[0] = newtable[0][:offset] + outofdate + newtable[0][:codelen] + newtable[0][blen(outofdate)+offset:]
     return newtable
 
-def weekview(todate, ndays, calendars, objs=None, dark_recurring=False, zero_offset=False, interval=15, inner_width=None):
+def weekview(todate, ndays, calendars, termsize=None, objs=None, dark_recurring=False, zero_offset=False, interval=15):
     from doublebuffer import tokenize
     table_width = ndays if ndays > 0 else 7
     timecol = len(ftime() + '  ')
-    termsize = None
-    if inner_width is None:
-        termsize = os.get_terminal_size()
-        inner_width = (termsize.columns - timecol) // table_width
+    inner_width = (termsize.columns - timecol) // table_width
     def overlay(rows):
         def pop(tokens):
             if tokens:
@@ -751,11 +746,11 @@ def server():
     async def handle_connection(reader, writer):
         nonlocal objs
         nonlocal obj_lock
-        argv = await read_pickled(reader)
+        argv, termsize = await read_pickled(reader)
         print(datetime.now(), 'serving client:', argv)
         try:
             async with obj_lock:
-                table = parse_args(argv, objs=objs)
+                table = parse_args(argv, termsize, objs=objs)
         except Exception as e:
             table = [str(e)]
         write_pickled(writer, table)
@@ -783,10 +778,10 @@ def server():
             pass
         exit(1)
     asyncio.run(start_server())
-def client(argv):
+def client(argv, termsize):
     async def do_client():
         reader, writer = await asyncio.open_unix_connection(SOCK)
-        write_pickled(writer, argv)
+        write_pickled(writer, (argv, termsize))
         await writer.drain()
         table = await read_pickled(reader)
         writer.close()
@@ -794,7 +789,7 @@ def client(argv):
         return table
     return asyncio.run(do_client())
 
-def parse_args(argv, objs=None):
+def parse_args(argv, termsize, objs=None):
     parser = argparse.ArgumentParser(exit_on_error=False)
     parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
     parser.add_argument('-c', '--calendar', metavar='CALENDAR', action='append', help='restrict to specified calendar(s)')
@@ -804,7 +799,6 @@ def parse_args(argv, objs=None):
     parser.add_argument('-x', '--four-week', action='store_true', help='print a four-week diagram')
     parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
     parser.add_argument('-w', '--week-view', metavar='N', nargs='?', const=0, type=int, help='print a multi-day view (of N days)')
-    parser.add_argument('-m', '--inner-width', metavar='N', type=int, help='inner width for week view')
     parser.add_argument('date', nargs='*', help='use this date instead of today')
     args, remain = parser.parse_known_args(argv)
     if remain:
@@ -830,9 +824,9 @@ def parse_args(argv, objs=None):
     if args.list_calendar:
         table = listcal(aday, args.calendar, no_recurring=args.no_recurring, objs=objs)
     elif args.four_week:
-        table = fourweek(aday, args.calendar, zero_offset=args.zero_offset, objs=objs)
+        table = fourweek(aday, args.calendar, termsize=termsize, zero_offset=args.zero_offset, objs=objs)
     elif args.week_view is not None:
-        table = weekview(aday, args.week_view, args.calendar, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, inner_width=args.inner_width, objs=objs)
+        table = weekview(aday, args.week_view, args.calendar, termsize=termsize, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, objs=objs)
     else:
         agendamaker = Agenda(args.calendar, objs=objs, interval=args.interval)
         table = agendamaker.agenda_table(aday)
@@ -848,7 +842,20 @@ def main():
     group.add_argument('-d', '--download-only', action='store_true', help="don't print anything, just refresh the calendar cache")
     group.add_argument('--server', action='store_true', help="start server")
     group.add_argument('--client', action='store_true', help="run as client")
+    parser.add_argument('-W', '--width', action='store', type=int, help='set terminal width')
+    parser.add_argument('-H', '--height', action='store', type=int, help='set terminal height')
     args, remainder = parser.parse_known_args()
+
+    termsize = TerminalSize(args.width, args.height)
+    if termsize[0] is None or termsize[1] is None:
+        try:
+            term_dimensions = os.get_terminal_size()
+            if termsize.columns is None:
+                termsize = termsize._replace(columns=term_dimensions.columns)
+            if termsize.lines is None:
+                termsize = termsize._replace(lines=term_dimensions.lines)
+        except OSError:
+            pass
 
     if args.force_ipv4:
         ipv4_monkey_patch()
@@ -861,9 +868,9 @@ def main():
         server()
         exit(0)
     elif args.client:
-        return client(remainder)
+        return client(remainder, termsize)
     else:
-        return parse_args(remainder)
+        return parse_args(remainder, termsize)
 
 if __name__ == '__main__':
     table = main()
