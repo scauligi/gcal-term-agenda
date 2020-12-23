@@ -5,7 +5,6 @@ import re
 import sys
 import yaml
 import pickle
-import hashlib
 import argparse
 
 from collections import Counter, OrderedDict, defaultdict as ddict
@@ -169,13 +168,12 @@ def download_evts(refdate):
             ev.calendar = calId
             evs.append(ev)
     evs.sort(key=lambda e: (as_datetime(e.start), reversor(as_datetime(e.end))))
-    digest = hashlib.blake2b(yaml.dump(evs, canonical=True).encode()).digest()
     obj = {'events': evs, 'calendars': cals, 'timestamp': now}
     with open('evts.yaml', 'w') as f:
         yaml.dump(obj, f, default_flow_style=False)
     with open('evts.pickle', 'wb') as f:
         pickle.dump(obj, f, protocol=-1)
-    return obj, digest
+    return obj
 
 def string_outofdate(obj, now=None):
     if not now:
@@ -184,15 +182,12 @@ def string_outofdate(obj, now=None):
         return fg(3) + 'Warning: timestamp is out of date by ' + tdtime(now - obj['timestamp']) + RESET
     return None
 
-def load_evts(*, print_warning=False, digested=False):
+def load_evts(*, print_warning=False):
     now = datetime.now(tzlocal())
-    digest = None
     try:
         try:
             with open('evts.pickle', 'rb') as f:
                 obj = pickle.load(f)
-            if digested:
-                digest = hashlib.blake2b(yaml.dump(obj['events'], canonical=True).encode()).digest()
         except FileNotFoundError:
             with open('evts.yaml') as f:
                 obj = yaml.full_load(f)
@@ -209,8 +204,6 @@ def load_evts(*, print_warning=False, digested=False):
         raise
 
     evt2short = make_evt2short(obj)
-    if digested:
-        return (obj, evt2short), digest
     return obj, evt2short
 
 def make_evt2short(obj):
@@ -717,24 +710,22 @@ def server():
         # not a race since we check again later
         raise Exception(SOCK + ' already exists')
     obj_lock = asyncio.Lock()
-    objs, lasthash = load_evts(print_warning=True, digested=True)
+    objs = load_evts(print_warning=True)
     agenda = Agenda(None, objs=objs)
 
     async def download_loop():
         nonlocal objs
         nonlocal agenda
         nonlocal obj_lock
-        nonlocal lasthash
         while True:
             try:
-                print('downloading...')
+                print(datetime.now(), 'downloading...')
                 async with obj_lock:
-                    obj, thishash = download_evts(datetime.combine(date.today(), time(0), tzlocal()))
+                    obj = download_evts(datetime.combine(date.today(), time(0), tzlocal()))
                     evt2short = make_evt2short(obj)
                     objs = (obj, evt2short)
                     agenda = Agenda(None, objs=objs)
-                print('loaded ok:', datetime.now(), lasthash == thishash)
-                lasthash = thishash
+                print(datetime.now(), 'loaded ok')
             except Exception as e:
                 print('download loop:', e)
             await asyncio.sleep(5*60)
@@ -743,7 +734,7 @@ def server():
         nonlocal agenda
         nonlocal obj_lock
         argv = await read_pickled(reader)
-        print('serving client:', argv)
+        print(datetime.now(), 'serving client:', argv)
         try:
             async with obj_lock:
                 table = parse_args(argv, agendamaker=agenda, objs=objs)
