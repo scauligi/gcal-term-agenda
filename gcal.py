@@ -74,6 +74,8 @@ def todateobj(d, tzname):
     return ret
 
 def fromdateobj(o):
+    if o is None:
+        return None
     if 'date' in o:
         return dateparse(o['date']).date()
     elif 'dateTime' in o:
@@ -88,6 +90,7 @@ class Event:
         self.start = None
         self.end = None
         self.recurrence = None
+        self.id = None
         self.uid = None
         self.recurring = False
         self.cancelled = False
@@ -123,6 +126,7 @@ class Event:
             evt.recurring = True
         evt.start = fromdateobj(e['start'])
         evt.end = fromdateobj(e['end'])
+        evt.id = e['id']
         # XXX recurrence?
         evt._e = e
         return evt
@@ -133,10 +137,14 @@ def singleDay(summary, d):
     evt.end = d + t(days=1)
     return evt
 
+HttpError = None
 def s():
     global service
+    global HttpError
     if service is None:
         load_http_auth()
+        import googleapiclient.errors
+        HttpError = googleapiclient.errors.HttpError
     return service
 
 def submit(evt, tzname, calId):

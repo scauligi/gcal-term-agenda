@@ -12,6 +12,7 @@ from collections import Counter, OrderedDict, defaultdict as ddict, namedtuple
 from datetime import date, datetime, time, timedelta as t, timezone
 from dateutil.tz import tzlocal
 from itertools import zip_longest
+from unittest.mock import patch as mock_patch, MagicMock
 
 import gcal
 from gcal import Event
@@ -152,53 +153,93 @@ def filter_calendars(obj, calendars):
     _getCal(calendars)
     return callist
 
-def download_evts(refdate):
+def _ev_entry(ev):
+    return {
+        'id': ev.id,
+        'start': ev.start,
+        'end': ev.end,
+        'summary': ev.summary,
+        'location': ev.location,
+        'startdate': as_date(ev.start),
+        'enddate': as_date(ev.end, endtime=True),
+        'cancelled': ev.cancelled,
+        'calendar': ev.calendar,
+        'hastime': isinstance(ev.start, datetime),
+        'blob': pickle.dumps(ev, protocol=-1),
+    }
+
+def download_evts():
+    db = sqlite3.connect('evts.sqlite3')
+    with mock_patch('pickle.dumps'):
+        keys = list(_ev_entry(MagicMock()).keys())
+        db.execute(f'create table if not exists events (id PRIMARY KEY,{",".join(keys[1:])})')
     now = datetime.now(tzlocal())
-    evs = []
-    day_evs = []
     cals = gcal.s().calendarList().list().execute()['items']
+    calmap = {cal['id']: cal for cal in cals}
     allCals = get_visible_cals(cals)
+    try:
+        old_obj = load_evts(print_warning=False, partial=True)
+        syncTokens = {cal['id']: cal.get('syncToken') for cal in old_obj['calendars']}
+    except FileNotFoundError:
+        syncTokens = {}
     for calId in allCals.values():
         if not isinstance(calId, str) or '@' not in calId:
             continue
-        r = gcal.s().events().list(calendarId=calId,
-                singleEvents=True,
-                orderBy='startTime',
-                timeMin=(refdate - t(days=10)).isoformat(),
-                timeMax=(refdate + t(days=30)).isoformat()).execute()
-        for e in r['items']:
-            ev = Event.unpkg(e)
-            ev.calendar = calId
-            evs.append(ev)
-    evs.sort(key=lambda e: (as_datetime(e.start), reversor(as_datetime(e.end))))
-    obj = {'events': evs, 'calendars': cals, 'timestamp': now}
+        print(f'downloading {calId}...')
+        kwargs = {
+            'calendarId': calId,
+            'singleEvents': True,
+            'maxResults': 2500,
+            'syncToken': syncTokens.get(calId),
+        }
+        pagenum = 0
+        while True:
+            pagenum += 1
+            if pagenum > 1:
+                print(f'  downloading page {pagenum}...')
+            try:
+                r = gcal.s().events().list(**kwargs).execute()
+            except gcal.HttpError as e:
+                if int(e.resp['status']) == 410:
+                    print("  410'd, redownloading...")
+                    db.execute(f'''delete from events where calendar = ?''', (calId,))
+                    if calId in syncTokens:
+                        del syncTokens[calId]
+                    if 'syncToken' in kwargs:
+                        del kwargs['syncToken']
+                    if 'pageToken' in kwargs:
+                        del kwargs['pageToken']
+                    pagenum = 0
+                    continue
+                else:
+                    raise
+            entries = []
+            deleting = []
+            for e in r['items']:
+                if e['status'] == 'cancelled':
+                    deleting.append((e['id'],))
+                else:
+                    ev = Event.unpkg(e)
+                    ev.calendar = calId
+                    entries.append(_ev_entry(ev))
+            db.executemany(f'''insert into events values ({",".join(f":{key}" for key in keys)})
+                    on conflict(id) do update set {",".join(f"{key}=:{key}" for key in keys[1:])}''', entries)
+            db.executemany(f'''delete from events where id = ?''', deleting)
+            if 'nextPageToken' in r:
+                kwargs['pageToken'] = r['nextPageToken']
+                continue
+            if 'nextSyncToken' in r:
+                calmap[calId]['syncToken'] = r['nextSyncToken']
+            break
+        db.commit()
+    obj = {
+        'calendars': cals,
+        'timestamp': now,
+    }
     with open('evts.yaml', 'w') as f:
         yaml.dump(obj, f, default_flow_style=False)
     with open('evts.pickle', 'wb') as f:
         pickle.dump(obj, f, protocol=-1)
-    db = sqlite3.connect('evts.sqlite3')
-    def ev_entry(ev):
-        return {
-            'id': ev._e['id'],
-            'start': ev.start,
-            'end': ev.end,
-            'summary': ev.summary,
-            'location': ev.location,
-            'startdate': as_date(ev.start),
-            'enddate': as_date(ev.end, endtime=True),
-            'cancelled': ev.cancelled,
-            'calendar': ev.calendar,
-            'hastime': isinstance(ev.start, datetime),
-            'blob': pickle.dumps(ev, protocol=-1),
-        }
-    keys = list(ev_entry(evs[0]).keys())[1:]
-    db.execute(f'create table if not exists events (id PRIMARY KEY,{",".join(keys)})')
-    for ev in evs:
-        entry = ev_entry(ev)
-        keys = list(entry.keys())
-        db.execute(f'''insert into events values ({",".join(f":{key}" for key in keys)})
-                on conflict(id) do update set {",".join(f"{key}=:{key}" for key in keys[1:])}''', entry)
-    db.commit()
     return obj
 
 def string_outofdate(obj, now=None):
@@ -208,7 +249,7 @@ def string_outofdate(obj, now=None):
         return fg(3) + 'Warning: timestamp is out of date by ' + tdtime(now - obj['timestamp']) + RESET
     return None
 
-def load_evts(*, print_warning=False):
+def load_evts(*, print_warning=False, partial=False):
     now = datetime.now(tzlocal())
     try:
         try:
@@ -218,9 +259,9 @@ def load_evts(*, print_warning=False):
             with open('evts.yaml') as f:
                 obj = yaml.full_load(f)
             obj['timestamp'] = localize(obj['timestamp'])
-            for evt in obj['events']:
-                evt.start = localize(evt.start)
-                evt.end = localize(evt.end)
+            # for evt in obj['events']:
+            #     evt.start = localize(evt.start)
+            #     evt.end = localize(evt.end)
         if obj['timestamp'] > now:
             print(obj['timestamp'])
         elif obj['timestamp'] + t(minutes=5) < now:
@@ -228,6 +269,8 @@ def load_evts(*, print_warning=False):
                 print('timestamp out of date', file=sys.stderr)
     except FileNotFoundError:
         raise
+    if partial:
+        return obj
 
     obj['db'] = sqlite3.connect('file:evts.sqlite3?mode=ro', uri=True)
 
@@ -541,7 +584,7 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False):
     calstart = todate - t(days=offset)
     events = get_events(obj, todate - t(days=offset), 4 * 7, callist)
 
-    for evt in obj['events']:
+    for evt in events:
         start = as_datetime(evt.start)
         end = as_datetime(evt.end)
         cellnum = (start.date() - calstart).days
@@ -735,7 +778,7 @@ def server():
             try:
                 print(datetime.now(), 'downloading...')
                 async with obj_lock:
-                    obj = download_evts(datetime.combine(date.today(), time(0), tzlocal()))
+                    obj = download_evts()
                     obj['db'] = db
                     evt2short = make_evt2short(obj)
                     objs = (obj, evt2short)
@@ -861,7 +904,7 @@ def main():
         ipv4_monkey_patch()
 
     if args.download_only:
-        download_evts(datetime.combine(date.today(), time(0), tzlocal()))
+        download_evts()
         print('loaded ok:', datetime.now())
         exit(0)
     elif args.server:
