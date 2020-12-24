@@ -47,12 +47,15 @@ RESET = '\033[0m'
 def blen(line):
     return len(re.sub('\033.*?m', '', line))
 
-def dtime(dt=None):
+def dtime(dt=None, shrink=False):
     if not dt:
         return re.sub(r'.', ' ', date.today().strftime('%a %m/%d'))
     s = dt.strftime('%a %m/%d')
     s = re.sub(r'0(\d)/', r' \1/', s)
     s = re.sub(r'/0(\d)$', r'/\1 ', s)
+    if shrink:
+        s = s.rstrip()
+        s = re.sub(r' +', r' ', s)
     return s
 
 def ftime(dt=None, now=False):
@@ -331,118 +334,218 @@ class Agenda:
 
         self.interval = t(minutes=(interval or 15))
 
-    def agenda_table(self, todate, ndays=None, print_warning=True, forced=False):
-        def quantize(thetime):
-            minutes = self.interval.seconds // 60
-            theminutes = (thetime.hour * 60 + thetime.minute) // minutes * minutes
-            return datetime(thetime.year, thetime.month, thetime.day, theminutes // 60, theminutes % 60, tzinfo=thetime.tzinfo)
+    # assumes times with granularity at minutes
+    def quantize(self, thetime, endtime=False):
+        if endtime:
+            return self.quantize(thetime - t(minutes=1))
+        minutes = self.interval.seconds // 60
+        theminutes = (thetime.hour * 60 + thetime.minute) // minutes * minutes
+        return datetime(thetime.year, thetime.month, thetime.day, theminutes // 60, theminutes % 60, tzinfo=thetime.tzinfo)
 
-        self.today = datetime.combine(todate, time(0), tzlocal())
+    def agenda_table(self, todate, ndays=None, print_warning=True):
+        self.todate = todate
         self.has_later = False
 
+        # table[0] is the time column
+        # table[n] is the event column for day n
+        # each column is a map keyed by tick
+        # special key None is for full-day events
+        # also table[0][None] is reserved for status messages (like the outofdate string)
+        #
+        # table[0][None]: list[str]  (status messages that should print before the table)
+        # table[0][tick]: bool       (whether there is an event starting at this time anywhere in the table
+        # table[n][None]: list[evt]  (list of full-day events)
+        # table[n][tick]: list[evt]  (list of events starting at that tick)
         actual_ndays = ndays or 1
-        table = []
-        for _ in range(actual_ndays + 1):
-            bigcol = ddict(str)
-            bigcol[None] = []
-            table.append(bigcol)
-
-        events = get_events(self.obj, todate, actual_ndays, self.callist)
-
-        for evt in events:
-            index = max((as_date(evt.start) - todate).days, 0) + 1
-            if not isinstance(evt.start, datetime):
-                dateline = evt.summary
-                dateline = fg(self.evt2short(evt)) + dateline
-                dateline += RESET
-                table[index][None].append((dateline, (evt.end - todate).days))
-                continue
-            endtime = ''
-            tick = quantize(evt.start)
-            tock = tick + self.interval
-            if not table[0][tick.time()]:
-                table[0][tick.time()] = ftime(tick)
-            if evt.start != tick:
-                endtime = ' ({})'.format(ftime(evt.start).strip())
-            if evt.end == evt.start:
-                endtime += ' <-'
-            elif evt.end < tock:
-                endtime += ' (-> {})'.format(ftime(evt.end).strip())
-            skip = ndays is None and evt.end <= self.now and not forced
-            if evt.end > tock and (not skip):
-                self.has_later = True
-                initial = blen(table[index][tick.time()])
-                while evt.end > tock:
-                    tick = tock
-                    tock = tick + self.interval
-                    if (length := blen(table[index][tick.time()])) < initial:
-                        table[index][tick.time()] += ' ' * (initial - length)
-                    table[index][tick.time()] += fg(self.evt2short(evt))
-                    if evt.end == tock:
-                        table[index][tick.time()] += '_|_ '
-                    elif evt.end < tock:
-                        table[index][tick.time()] += '-+- ({}) '.format(ftime(evt.end).strip())
-                    else:
-                        table[index][tick.time()] += ' |  '
-                    if tick == quantize(evt.start) + self.interval and ndays is None and evt.location:
-                        table[index][tick.time()] += evt.location + '  '
-                    table[index][tick.time()] += RESET
-                tick = quantize(evt.start)
-                tock = tick + self.interval
-            elif (not skip) and ndays is None:  # and evt.end <= tock:
-                endtime = ' ' + evt.location + endtime
-            summary = fg(self.evt2short(evt)) + evt.summary + endtime + RESET + '   '
-            table[index][tick.time()] += summary
+        table = [ddict(bool)]
+        table[0][None] = []
+        for _ in range(actual_ndays):
+            table.append(ddict(list))
 
         if print_warning:
             if outofdate := string_outofdate(self.obj, self.now):
                 table[0][None].append(outofdate)
 
-        if ndays is None:
-            newtable = []
-            nowtick = quantize(self.now)
-            datefield = dtime(todate)
-            timefield = ftime().replace(' ', '-')
-            did_first = False
-            if table[0][None]:
-                newtable.extend(table[0][None])
-            if len(table[1].keys()) == 1 and not table[1][None]:
-                newtable.append(f'{datefield} {LGRAY}{timefield}  no events{RESET}')
-                datefield = dtime()
-                did_first = True
-            for row, plusn in table[1][None]:
-                if plusn != 1:
-                    plusn -= 1
-                    s = 's' if plusn != 1 else ''
-                    row += f' (+{plusn} day{s})'
-                newtable.append(f'{datefield} {timefield}  {row}')
-                datefield = dtime()
-            if self.now.date() == todate:
-                table[1][nowtick.time()] += '  <-- ' + ftime(self.now, now=True)
-            for minutes in range(0, 24 * 60, self.interval.seconds // 60):
-                tickt = time(minutes // 60, minutes % 60)
-                tick = datetime.combine(todate, tickt, tzlocal())
-                if not (timefield := table[0][tickt]):
-                    if tick < nowtick and not table[1][tickt] and not forced:
-                        continue
-                    if not did_first and tick != nowtick:
-                        continue
-                    timefield = ftime()
-                row = table[1][tickt]
-                newtable.append(f'{datefield} {timefield}  {row}'.rstrip())
-                datefield = dtime()
-                did_first = True
-            while newtable and not (lastline := newtable.pop()):
-                pass
-            newtable.append(lastline)
-            return newtable
+        events = get_events(self.obj, todate, actual_ndays, self.callist)
+
+        for evt in events:
+            # get column (1-indexed)
+            # accounts for events that start before the first day
+            index = max((as_date(evt.start) - todate).days, 0) + 1
+            if not isinstance(evt.start, datetime):
+                # full-day event
+                table[index][None].append(evt)
+                continue
+            # timeblock event
+            tickt = self.quantize(evt.start).time()
+            table[0][tickt] = True
+            table[index][tickt].append(evt)
+
         return table
 
+    def dayview(self, table, forced=False):
+        newtable = []
+
+        nowtick = self.quantize(self.now)
+        timefield = ftime().replace(' ', '-')
+        did_first = False
+
+        # expect table with only [0] and [1] columns
+        timecol, evtcol = table
+
+        # if there are no actual events
+        if not any(evtcol.items()):
+            newtable.append(f'{dtime(self.todate)} {LGRAY}{timefield}  no events{RESET}')
+            return newtable
+
+        # print each full-day
+        fulldays = evtcol.pop(None, [])
+        for evt in fulldays:
+            span = ''
+            ndays = (evt.end - evt.start).days
+            if ndays != 1:
+                startspan = ''
+                endspan = ''
+                lastdate = evt.end - t(days=1)
+                if evt.start != self.todate:
+                    startspan = dtime(evt.start, shrink=True) + ' '
+                if lastdate != self.todate:
+                    endspan = ' ' + dtime(lastdate, shrink=True)
+                span = ' ({}->{})'.format(startspan, endspan)
+            summary = fg(self.evt2short(evt)) + evt.summary + RESET
+            newtable.append([timefield, summary + span])
+
+        # whether to do "now" arrow
+        is_todate = self.now.date() == self.todate
+
+        # whether to show anchors/endings and location or not
+        def _expand(evt):
+            if forced or not is_todate:
+                # as of this writing, `not is_todate` implies `forced`
+                # but... just in case write out the full condition
+                return True
+            expand = nowtick < self.quantize(evt.end)
+            self.has_later = expand or self.has_later
+            return expand
+
+        # convenience for looping over a changing column
+        def _intervals(col):
+            if not col:
+                return
+            minutes = 0
+            tickt = time(0, 0)
+            while tickt <= max(col):
+                yield tickt
+                minutes += self.interval.seconds // 60
+                tickt = time(minutes // 60, minutes % 60)
+
+        # convenience for looping until an end time
+        def _until(starttick, endtick):
+            tick = starttick
+            while tick < endtick:
+                yield tick
+                tick += self.interval
+
+        # iterate over each interval slot
+        contents = ddict(list)  # tick -> (initial, summary)
+        for tickt in _intervals(evtcol):
+            tick = datetime.combine(self.todate, tickt, tzlocal())
+            tock = tick + self.interval
+
+            for evt in evtcol[tickt]:
+                expand = _expand(evt)
+                summary = evt.summary
+                endtext = ''
+
+                # display true start time if necessary
+                if evt.start != tick:
+                    endtext += ' ({})'.format(ftime(evt.start).strip())
+
+                # show ending markers on short events
+                if expand:
+                    if evt.end < tock:
+                        if evt.end == evt.start:
+                            endtext += ' <-'
+                        else:
+                            if endtext:
+                                endtext = endtext[:-1] + ' -> {})'
+                            else:
+                                endtext += ' (-> {})'
+                            endtext = endtext.format(ftime(evt.end).strip())
+                        endtext = ' ' + evt.location + endtext
+
+                summary = fg(self.evt2short(evt)) + summary + endtext + RESET + '   '
+
+                # place into leftmost region that is large enough
+                prev_end = 0
+                for i, (initial, text) in enumerate(sorted(contents[tickt])):
+                    if initial - prev_end >= blen(summary):
+                        break
+                    prev_end = initial + blen(text)
+                contents[tickt].append((prev_end, summary))
+                initial = prev_end
+
+                # drop anchor on long events
+                if expand:
+                    lasttick = self.quantize(evt.end, endtime=True)
+                    for endtick in _until(tock, evt.end):
+                        endtock = endtick + self.interval
+                        if evt.end == endtock:
+                            text = '_|_ '
+                        elif evt.end < endtock:
+                            text = '-+- ({}) '.format(ftime(evt.end).strip())
+                        else:
+                            text = ' |  '
+                        if endtick == endtock:
+                            text += evt.location + '  '
+                        text = fg(self.evt2short(evt)) + text + RESET
+                        contents[endtick.time()].append((initial, text))
+                        endtick += self.interval
+
+        # assemble newtable from contents
+        for tickt in _intervals(contents):
+            tick = datetime.combine(self.todate, tickt, tzlocal())
+
+            # skip blank slots until the first event
+            if not did_first and not timecol[tickt] and not (is_todate and tick == nowtick):
+                continue
+
+            # print tick time for event starts
+            timefield = ftime(tick if timecol[tickt] else None)
+
+            # print each event at the right output column
+            content = ''
+            prev_end = 0
+            for (initial, text) in sorted(contents[tickt]):
+                content += ' ' * (initial - prev_end)
+                content += text
+                prev_end = initial + blen(text)
+                did_first = True
+
+            # place the "now" arrow
+            if is_todate and tick == nowtick:
+                content += '  <-- ' + ftime(self.now, now=True)
+                did_first = True
+
+            newtable.append([timefield, content])
+
+        # compile newtable
+        newtable = [[dtime(), *line] for line in newtable]
+        newtable[0][0] = dtime(self.todate)
+        newtable = [f'{line[0]} {line[1]}  {line[2]}' for line in newtable]
+
+        # collect status messages
+        if timecol[None]:
+            newtable = timecol[None] + newtable
+
+        return newtable
 
     @staticmethod
     def print_table(table):
-        lines = re.sub(r'\n{8,}', r'\n'*8, '\n'.join(line.rstrip() for line in table)).split('\n')
-        print('\n'.join(lines))
+        lines = '\n'.join(line.rstrip() for line in table)
+        lines = re.sub(r'\n{8,}', r'\n'*8, lines)
+        lines = re.sub(r'\n*$', '', lines)
+        print(lines)
 
 
 def listcal(todate, calendars, no_recurring=False, forced=False, objs=None):
@@ -785,10 +888,12 @@ def parse_args(argv, termsize, objs=None):
         table = weekview(aday, args.week_view, args.calendar, termsize=termsize, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, objs=objs)
     else:
         agendamaker = Agenda(args.calendar, objs=objs, interval=args.interval)
-        table = agendamaker.agenda_table(aday, forced=forced)
+        cols = agendamaker.agenda_table(aday)
+        table = agendamaker.dayview(cols, forced=forced)
         if not forced and not agendamaker.has_later:
             aday = date.today() + t(days=1)
-            table += agendamaker.agenda_table(aday, print_warning=False, forced=forced)
+            cols = agendamaker.agenda_table(aday, print_warning=False)
+            table += agendamaker.dayview(cols)
     return table
 
 def main():
