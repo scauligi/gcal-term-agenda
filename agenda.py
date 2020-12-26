@@ -394,6 +394,96 @@ class Agenda:
 
         return table
 
+    # convenience for looping over changing column(s)
+    def _intervals(self, *cols):
+        if not any(cols):
+            return
+        minutes = 0
+        tickt = time()
+        while tickt <= max(max(col.keys(), default=time()) for col in cols):
+            yield tickt
+            minutes += self.interval.seconds // 60
+            tickt = time(minutes // 60, minutes % 60)
+
+    # convenience for looping until an end time
+    def _until(self, starttick, endtick):
+        tick = starttick
+        while tick < endtick:
+            yield tick
+            tick += self.interval
+
+    def _evtcol(self, *evtcols, forced, nowtick=None):
+        # whether to show anchors/endings and location or not
+        def _expand(evt):
+            if forced:
+                return True
+            expand = nowtick < self.quantize(evt.end)
+            self.has_later = expand or self.has_later
+            return expand
+
+        # iterate over each interval slot
+        contents = ddict(list)  # tick -> (col_index, initial, summary)
+        for tickt in self._intervals(*evtcols):
+            for col_index, evtcol in enumerate(evtcols):
+                tick = datetime.combine(self.todate + t(days=col_index), tickt, tzlocal())
+                tock = tick + self.interval
+
+                for evt in evtcol[tickt]:
+                    expand = _expand(evt)
+                    summary = evt.summary
+                    endtext = ''
+
+                    # display true start time if necessary
+                    if evt.start != tick:
+                        endtext += ' ({})'.format(ftime(evt.start).strip())
+
+                    # show ending markers on short events
+                    if expand:
+                        if evt.end < tock:
+                            if evt.end == evt.start:
+                                endtext += ' <-'
+                            else:
+                                if endtext:
+                                    endtext = endtext[:-1] + ' -> {})'
+                                else:
+                                    endtext += ' (-> {})'
+                                endtext = endtext.format(ftime(evt.end).strip())
+                            endtext = ' ' + evt.location + endtext
+
+                    summary = fg(self.evt2short(evt)) + summary + endtext + RESET + '   '
+
+                    # place into leftmost region that is large enough
+                    prev_end = 0
+                    for i, (icol_index, initial, text) in enumerate(sorted(contents[tickt])):
+                        if icol_index != col_index:
+                            continue
+                        if initial - prev_end >= blen(summary):
+                            break
+                        prev_end = initial + blen(text)
+                    contents[tickt].append((col_index, prev_end, summary))
+                    initial = prev_end
+
+                    # drop anchor on long events
+                    if expand:
+                        lasttick = self.quantize(evt.end, endtime=True)
+                        for endtick in self._until(tock, evt.end):
+                            endtock = endtick + self.interval
+                            if evt.end == endtock:
+                                text = '_|_ '
+                            elif evt.end < endtock:
+                                text = '-+- ({}) '.format(ftime(evt.end).strip())
+                            else:
+                                text = ' |  '
+                            if endtick == endtock:
+                                text += evt.location + '  '
+                            text = fg(self.evt2short(evt)) + text + RESET
+                            contents[endtick.time()].append((col_index, initial, text))
+                            endtick += self.interval
+        for tickt in contents:
+            contents[tickt].sort()
+        return contents
+
+
     def dayview(self, table, forced=False):
         newtable = []
 
@@ -429,96 +519,16 @@ class Agenda:
         # whether to do "now" arrow
         is_todate = self.now.date() == self.todate
 
-        # whether to show anchors/endings and location or not
-        def _expand(evt):
-            if forced or not is_todate:
-                # as of this writing, `not is_todate` implies `forced`
-                # but... just in case write out the full condition
-                return True
-            expand = nowtick < self.quantize(evt.end)
-            self.has_later = expand or self.has_later
-            return expand
-
-        # convenience for looping over a changing column
-        def _intervals(col):
-            if not col:
-                return
-            minutes = 0
-            tickt = time(0, 0)
-            while tickt <= max(col):
-                yield tickt
-                minutes += self.interval.seconds // 60
-                tickt = time(minutes // 60, minutes % 60)
-
-        # convenience for looping until an end time
-        def _until(starttick, endtick):
-            tick = starttick
-            while tick < endtick:
-                yield tick
-                tick += self.interval
-
-        # iterate over each interval slot
-        contents = ddict(list)  # tick -> (initial, summary)
-        for tickt in _intervals(evtcol):
-            tick = datetime.combine(self.todate, tickt, tzlocal())
-            tock = tick + self.interval
-
-            for evt in evtcol[tickt]:
-                expand = _expand(evt)
-                summary = evt.summary
-                endtext = ''
-
-                # display true start time if necessary
-                if evt.start != tick:
-                    endtext += ' ({})'.format(ftime(evt.start).strip())
-
-                # show ending markers on short events
-                if expand:
-                    if evt.end < tock:
-                        if evt.end == evt.start:
-                            endtext += ' <-'
-                        else:
-                            if endtext:
-                                endtext = endtext[:-1] + ' -> {})'
-                            else:
-                                endtext += ' (-> {})'
-                            endtext = endtext.format(ftime(evt.end).strip())
-                        endtext = ' ' + evt.location + endtext
-
-                summary = fg(self.evt2short(evt)) + summary + endtext + RESET + '   '
-
-                # place into leftmost region that is large enough
-                prev_end = 0
-                for i, (initial, text) in enumerate(sorted(contents[tickt])):
-                    if initial - prev_end >= blen(summary):
-                        break
-                    prev_end = initial + blen(text)
-                contents[tickt].append((prev_end, summary))
-                initial = prev_end
-
-                # drop anchor on long events
-                if expand:
-                    lasttick = self.quantize(evt.end, endtime=True)
-                    for endtick in _until(tock, evt.end):
-                        endtock = endtick + self.interval
-                        if evt.end == endtock:
-                            text = '_|_ '
-                        elif evt.end < endtock:
-                            text = '-+- ({}) '.format(ftime(evt.end).strip())
-                        else:
-                            text = ' |  '
-                        if endtick == endtock:
-                            text += evt.location + '  '
-                        text = fg(self.evt2short(evt)) + text + RESET
-                        contents[endtick.time()].append((initial, text))
-                        endtick += self.interval
+        contents = self._evtcol(evtcol, forced=forced, nowtick=nowtick)
 
         lasttick = max(contents.keys(), default=time())
         if is_todate:
+            # make sure there's a ddict key entry for nowtick
+            # so that self._intervals iterates at least that far
             contents[nowtick.time()]
 
         # assemble newtable from contents
-        for tickt in _intervals(contents):
+        for tickt in self._intervals(contents):
             tick = datetime.combine(self.todate, tickt, tzlocal())
 
             # skip blank slots until the first event
@@ -534,7 +544,7 @@ class Agenda:
             # print each event at the right output column
             content = ''
             prev_end = 0
-            for (initial, text) in sorted(contents[tickt]):
+            for (_, initial, text) in contents[tickt]:
                 content += ' ' * (initial - prev_end)
                 content += text
                 prev_end = initial + blen(text)
@@ -785,10 +795,44 @@ def weekview(todate, ndays, calendars, termsize=None, objs=None, dark_recurring=
         offset = todate.isoweekday() % 7
         if zero_offset:
             offset = (offset - 1) % 7
-    start = todate - t(days=offset)
+    weekstart = todate - t(days=offset)
+
     agendamaker = Agenda(calendars, objs=objs, dark_recurring=dark_recurring, interval=interval)
-    table = agendamaker.agenda_table(start, ndays=table_width)
+    timecol, *evtcols = agendamaker.agenda_table(weekstart, ndays=table_width)
+
+    daycols = [list() for evtcol in evtcols]
+    for i, evtcol in enumerate(evtcols):
+        for evt in evtcol.pop(None, []):
+            ndays = (evt.end - weekstart).days - i
+            subcols = daycols[i:i+ndays]
+            topslot = max(map(len, subcols))
+            for j in range(topslot):
+                if all(j >= len(daycol) or not daycol[j] for daycol in subcols):
+                    # found an empty slot range
+                    break
+            else:
+                j = topslot
+            for daycol in subcols:
+                daycol.extend([''] * (j - len(daycol) + 1))
+                assert not daycol[j]
+                daycol[j] = evt.summary
+
+    contents = agendamaker._evtcol(*evtcols, forced=True)
+
+    # XXX
     newtable = []
+    for tickt in agendamaker._intervals(contents):
+        timefield = ftime(tick if timecol[tickt] else None)
+        timerow = [timefield]
+        newtable.append([tickt])
+        for (n, _, summary) in contents[tickt]:
+            newtable.append(n, summary, end='¦')
+
+    # XXX
+    for i, daycol in enumerate(daycols):
+        newtable.append(dtime(weekstart + t(days=i)))
+        for slot in daycol:
+            newtable.append('  ' + slot)
     return newtable
 
 SOCK = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'unix_sock')
