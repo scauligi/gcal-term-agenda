@@ -177,10 +177,16 @@ def download_evts():
         keys = list(_ev_entry(MagicMock()).keys())
         db.execute(f'create table if not exists events (id PRIMARY KEY,{",".join(keys[1:])})')
     now = datetime.now(tzlocal())
-    try:
-        cals = gcal.s().calendarList().list().execute()['items']
-    except Exception as e:
-        print(repr(e))
+    tries_remaining = 2
+    while tries_remaining:
+        try:
+            tries_remaining -= 1
+            cals = gcal.s().calendarList().list().execute()['items']
+            break
+        except ConnectionResetError:
+            if not tries_remaining:
+                raise
+            gcal.load_http_auth()
     calmap = {cal['id']: cal for cal in cals}
     allCals = get_visible_cals(cals)
     try:

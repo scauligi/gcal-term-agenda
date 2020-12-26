@@ -50,16 +50,14 @@ def get_http_auth(filename):
     return credentials
 
 
-global http_auth
-global service
-service = None
+global _http_auth
+global _service
+_service = None
 def load_http_auth():
     import googleapiclient.discovery as discovery
-    global http_auth, service
-    http_auths = None
-    services = None
-    http_auth = get_http_auth('calendar.cred')
-    service = discovery.build('calendar', 'v3', credentials=http_auth)
+    global _http_auth, _service
+    _http_auth = get_http_auth('calendar.cred')
+    _service = discovery.build('calendar', 'v3', credentials=_http_auth)
     #print('calendar loaded')
 
 
@@ -139,13 +137,13 @@ def singleDay(summary, d):
 
 HttpError = None
 def s():
-    global service
+    global _service
     global HttpError
-    if service is None:
+    if _service is None:
         load_http_auth()
         import googleapiclient.errors
         HttpError = googleapiclient.errors.HttpError
-    return service
+    return _service
 
 def submit(evt, tzname, calId):
     return s().events().insert(calendarId=calId, body=evt.pkg(tzname)).execute()
