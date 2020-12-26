@@ -177,7 +177,10 @@ def download_evts():
         keys = list(_ev_entry(MagicMock()).keys())
         db.execute(f'create table if not exists events (id PRIMARY KEY,{",".join(keys[1:])})')
     now = datetime.now(tzlocal())
-    cals = gcal.s().calendarList().list().execute()['items']
+    try:
+        cals = gcal.s().calendarList().list().execute()['items']
+    except Exception as e:
+        print(repr(e))
     calmap = {cal['id']: cal for cal in cals}
     allCals = get_visible_cals(cals)
     try:
@@ -216,6 +219,8 @@ def download_evts():
                     continue
                 else:
                     raise
+            except Exception as e:
+                print(repr(e))
             entries = []
             deleting = []
             for e in r['items']:
@@ -502,12 +507,19 @@ class Agenda:
                         contents[endtick.time()].append((initial, text))
                         endtick += self.interval
 
+        lasttick = max(contents.keys(), default=time())
+        if is_todate:
+            contents[nowtick.time()]
+
         # assemble newtable from contents
         for tickt in _intervals(contents):
             tick = datetime.combine(self.todate, tickt, tzlocal())
 
             # skip blank slots until the first event
             if not did_first and not timecol[tickt] and not (is_todate and tick == nowtick):
+                continue
+            # skip blank slots after the last event
+            if tickt > lasttick and not (is_todate and tick == nowtick):
                 continue
 
             # print tick time for event starts
