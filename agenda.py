@@ -56,7 +56,7 @@ def shorten(text, inner_width):
         text = text[:inner_width-1] + '⋯'
     return f'{text:<{inner_width}}'
 
-def bshorten(text, min_width, max_width=None):
+def bshorten(text, max_width):
     if max_width is None:
         max_width = min_width
     text = text.rstrip()
@@ -68,8 +68,7 @@ def bshorten(text, min_width, max_width=None):
                 l -= 1
         tokens.append('⋯')
         return ''.join(tokens) + RESET
-    else:
-        return text + ' ' * (min_width - l)
+    return text
 
 # overlay `text` onto `row` at index `offset`
 def place(text, offset, row):
@@ -946,7 +945,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
                 i, initial, text = values
             if isinstance(text, str):
                 offset = calc_initial(i, initial)
-                text = bshorten(text, inner_width - initial, termsize.columns - offset)
+                text = bshorten(text, termsize.columns - offset)
                 row = place(text, offset, row)
         return row
 
