@@ -914,7 +914,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
         if isinstance(tickt, str):
             timestr = tickt * timecolsz
         else:
-            timestr = ftime(tickt) + '  '
+            timestr = '{:>{}}'.format(ftime(tickt).strip() + ' ', timecolsz)
         return LGRAY + timestr + line + RESET
 
     def assemble_row(tickt, iterable_or_fn):
@@ -931,7 +931,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
                     continue
                 i -= 1
                 fill = DASH * inner_width
-                filltime = ftime(tickt)
+                filltime = ' ' + ftime(tickt).strip() + ' '
                 if inner_width >= len(fill):
                     fill = fill[:-len(filltime)] + MGRAY + filltime
                 row = place(DGRAY + fill + RESET, calc_initial(i, 0), row)
