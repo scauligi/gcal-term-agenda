@@ -1055,7 +1055,6 @@ def client(argv, termsize):
 
 def parse_args(argv, termsize, objs=None):
     parser = argparse.ArgumentParser(exit_on_error=False)
-    parser.add_argument('-f', '--force-download-check', action='store_true', help='overrides -n')
     parser.add_argument('-c', '--calendar', metavar='CALENDAR', action='append', help='restrict to specified calendar(s)')
     parser.add_argument('-i', '--interval', metavar='MINUTES', action='store', type=int, help='interval for default/week view')
     parser.add_argument('-l', '--list-calendar', action='store_true', help='print a list of events')
