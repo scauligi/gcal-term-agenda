@@ -229,6 +229,7 @@ def _ev_entry(ev):
         'cancelled': ev.cancelled,
         'calendar': ev.calendar,
         'hastime': isinstance(ev.start, datetime),
+        'root_id': ev._e.get('recurringEventId', ev.id),
         'blob': pickle.dumps(ev, protocol=-1),
     }
 
@@ -370,26 +371,39 @@ def make_evt2short(obj):
         return cal2short[evt.calendar]
     return evt2short
 
-def get_events(obj, todate, ndays, callist):
+def get_events(obj, todate, ndays, callist, local_recurring=False):
     events = []
     if ndays >= 0:
         todates = (todate, todate, ndays)
-        ndays_clause = 'and date(startdate) < date(?, "+" || ? || " days")'
+        ndays_clause = 'and date(a.startdate) < date(?, "+" || ? || " days")'
     else:
         todates = (todate,)
         ndays_clause = ''
+    local_recurring_clause = ''
+    if local_recurring:
+        local_recurring_clause = '''
+              left join events b on a.root_id = b.root_id
+                    and date(b.startdate) >= date(a.startdate, "-14 days")
+                    and date(b.startdate) <= date(a.startdate, "+14 days")'''
     callist = list(set(callist))
     rows = obj['db'].execute(f"""
-          select blob from events
+          select a.id,a.blob,count(*) from events a
+          {local_recurring_clause}
           where
-                date(enddate) >= date(?)
+                date(a.enddate) >= date(?)
                  {ndays_clause}
-             and not cancelled
-             and calendar in ({','.join("?"*len(callist))})
-            order by startdate, hastime, datetime(start)
+             and not a.cancelled
+             and a.calendar in ({','.join("?"*len(callist))})
+            group by a.id
+            order by a.startdate, a.hastime, datetime(a.start)
     """, (*todates,
           *callist))
-    return [pickle.loads(row[0]) for row in rows]
+    for _, blob, count in rows:
+        ev = pickle.loads(blob)
+        if local_recurring:
+            ev.recurring = count > 1
+        events.append(ev)
+    return events
 
 class Agenda:
     def __init__(self, calendars, objs=None, dark_recurring=False, interval=None):
@@ -438,7 +452,7 @@ class Agenda:
             if outofdate := string_outofdate(self.obj, self.now):
                 table[0][None].append(outofdate)
 
-        events = get_events(self.obj, todate, actual_ndays, self.callist)
+        events = get_events(self.obj, todate, actual_ndays, self.callist, local_recurring=True)
 
         for evt in events:
             # get column (1-indexed)
@@ -672,7 +686,7 @@ def listcal(todate, calendars, no_recurring=False, forced=False, objs=None):
         (follmonth,                         '== THE FUTURE =='),
     ]
 
-    events = get_events(obj, todate, 1 if forced else -1, callist)
+    events = get_events(obj, todate, 1 if forced else -1, callist, local_recurring=forced)
 
     seen = Counter()
     for evt in events:
@@ -771,7 +785,7 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False):
     cells = [(list(), list()) for _ in range(table_width * table_height)]
 
     calstart = todate - t(days=offset)
-    events = get_events(obj, todate - t(days=offset), 4 * 7, callist)
+    events = get_events(obj, todate - t(days=offset), 4 * 7, callist, local_recurring=True)
 
     for evt in events:
         start = as_datetime(evt.start)
