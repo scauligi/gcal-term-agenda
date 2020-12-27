@@ -45,6 +45,7 @@ class reversor:
 def fg(short):
     return f'\033[38;5;{short}m'
 LGRAY = fg(250)
+DGRAY = fg(235)
 RESET = '\033[0m'
 
 def blen(line):
@@ -455,11 +456,14 @@ class Agenda:
         return table
 
     # convenience for looping over changing column(s)
-    def _intervals(self, *cols):
+    def _intervals(self, *cols, start_min=False):
         if not any(cols):
             return
         minutes = 0
         tickt = time()
+        if start_min:
+            tickt = min(min(col.keys(), default=time()) for col in cols)
+            minutes = tickt.hour * 60 + tickt.minute
         while tickt <= max(max(col.keys(), default=time()) for col in cols):
             yield tickt
             minutes += self.interval.seconds // 60
@@ -832,9 +836,7 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False):
         else:
             newtable.append(line)
     if outofdate := string_outofdate(obj, now):
-        codelen = 11
-        offset = 2 + codelen
-        newtable[0] = newtable[0][:offset] + outofdate + newtable[0][:codelen] + newtable[0][blen(outofdate)+offset:]
+        newtable[0] = place(outofdate, 2, newtable[0])
     return newtable
 
 def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recurring=False, zero_offset=False, interval=None):
@@ -855,17 +857,6 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
 
     timecolsz = len(ftime()) + 2
     inner_width = (termsize.columns - timecolsz - (table_width + 1)) // table_width
-
-    def do_row(fill, left, mid=None, right=None, _thick=None):
-        if mid is None:
-            mid = left
-        if right is None:
-            right = left
-        line = left
-        for _ in range(table_width):
-            line += fill * inner_width + mid
-        line = line[:-1] + right
-        return LGRAY + line + RESET
 
     # full-day events part 1
     OPEN = object()
@@ -902,21 +893,49 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
                 assert daycol[j] is OPEN
                 daycol[j] = CLOSED
 
+    final_i = {}
+    for i, evtcol in enumerate(evtcols):
+        for tickt in evtcol:
+            final_i[tickt] = i
+
     contents = agendamaker._evtcol(*evtcols, forced=True)
 
     newtable = []
 
-    def assemble_row(tickt, iterable_or_fn):
-        if tickt is not None:
-            row = LGRAY + ftime(tickt) + RESET
+    def do_row(tickt, fill, left, mid=None, right=None, _thick=None):
+        if mid is None:
+            mid = left
+        if right is None:
+            right = left
+        line = left
+        for _ in range(table_width):
+            line += fill * inner_width + mid
+        line = line[:-1] + right
+        if isinstance(tickt, str):
+            timestr = tickt * timecolsz
         else:
-            row = ftime()
-        row += '  '
-        row += do_row(' ', PIPE)
+            timestr = ftime(tickt) + '  '
+        return LGRAY + timestr + line + RESET
+
+    def assemble_row(tickt, iterable_or_fn):
+        def calc_initial(i, initial):
+            return i * (inner_width + 1) + 1 + initial + timecolsz
+
+        row = do_row(tickt, ' ', PIPE)
+        if not isinstance(tickt, str) and tickt:
+            for i in range(final_i[tickt]):
+                fill = DASH * inner_width
+                if i == final_i[tickt] - 1:
+                    fill = fill[:-1] + '>'
+                row = place(DGRAY + fill + RESET,
+                            calc_initial(i, 0),
+                            row)
+
         if callable(iterable_or_fn):
             iterable = map(iterable_or_fn, range(table_width))
         else:
             iterable = iterable_or_fn
+
         for i, values in enumerate(iterable):
             if not isinstance(values, tuple):
                 text = values
@@ -925,40 +944,34 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
                 initial, text = values
             elif len(values) == 3:
                 i, initial, text = values
-            initial += timecolsz
             if isinstance(text, str):
-                calc_initial = i * (inner_width + 1) + 1 + initial
-                text = bshorten(text, inner_width, termsize.columns - calc_initial)
-                row = place(text, calc_initial, row)
+                offset = calc_initial(i, initial)
+                text = bshorten(text, inner_width - initial, termsize.columns - offset)
+                row = place(text, offset, row)
         return row
 
-    # date headers
+    # assemble date headers
     def date_header(i):
         thisdate = weekstart + t(days=i)
         datestr = dtime(thisdate)
         if thisdate == now.date():
             datestr = f'> {datestr} <'
-        return '{:^{}}'.format(datestr, inner_width)
-    row = assemble_row(None, date_header)
-    newtable.append(LGRAY + row + RESET)
-    newtable.append(' ' * timecolsz + do_row(DASH, *CORNERS[1]))
+        datestr = '{:^{}}'.format(datestr, inner_width)
+        return LGRAY + datestr + RESET
+    newtable.append(assemble_row(None, date_header))
 
-    # full-day events part 2
-    for j in range(max(map(len, daycols))):
-        row = assemble_row(None, lambda i: daycols[i][j])
-        newtable.append(row)
+    # assemble full-day events
+    maxslots = max(map(len, daycols))
+    if maxslots:
+        newtable.append(do_row(None, DASH, *CORNERS[1]))
+    for j in range(maxslots):
+        newtable.append(assemble_row(None, lambda i: daycols[i][j]))
 
-    newtable.append(LGRAY + DASH * timecolsz + do_row(DASH, CORNERS[1][1], CORNERS[1][1], CORNERS[1][2]))
 
-    # timeblock events
-    did_first = False
-    for tickt in agendamaker._intervals(contents):
-        if not did_first and not timecol[tickt]:
-            continue
-        did_first = True
-
-        row = assemble_row(timecol[tickt], contents[tickt])
-        newtable.append(row)
+    # assemble timeblocks
+    newtable.append(do_row(DASH, DASH, CORNERS[1][1], *CORNERS[1][1:]))
+    for tickt in agendamaker._intervals(contents, start_min=True):
+        newtable.append(assemble_row(timecol[tickt], contents[tickt]))
 
     return newtable
 
