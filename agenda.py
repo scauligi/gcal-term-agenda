@@ -403,8 +403,8 @@ class Agenda:
             return evt2short(evt, dark=dark)
         self.evt2short = _evt2short
         self.callist = filter_calendars(self.obj, calendars)
-
         self.interval = t(minutes=(interval or 15))
+        self.seen_events = set()
 
     # assumes times with granularity at minutes
     def quantize(self, thetime, endtime=False):
@@ -446,7 +446,9 @@ class Agenda:
             index = max((as_date(evt.start) - todate).days, 0) + 1
             if not isinstance(evt.start, datetime):
                 # full-day event
-                table[index][None].append(evt)
+                if evt.id not in self.seen_events:
+                    table[index][None].append(evt)
+                    self.seen_events.add(evt.id)
                 continue
             # timeblock event
             tickt = self.quantize(evt.start).time()
