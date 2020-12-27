@@ -45,6 +45,7 @@ class reversor:
 def fg(short):
     return f'\033[38;5;{short}m'
 LGRAY = fg(250)
+MGRAY = fg(237)
 DGRAY = fg(235)
 RESET = '\033[0m'
 
@@ -892,10 +893,10 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
                 assert daycol[j] is OPEN
                 daycol[j] = CLOSED
 
-    final_i = {}
+    final_i = ddict(set)
     for i, evtcol in enumerate(evtcols):
         for tickt in evtcol:
-            final_i[tickt] = i
+            final_i[tickt].add(i)
 
     contents = agendamaker._evtcol(*evtcols, forced=True)
 
@@ -922,13 +923,18 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
 
         row = do_row(tickt, ' ', PIPE)
         if not isinstance(tickt, str) and tickt:
-            for i in range(final_i[tickt]):
+            for i in range(max(final_i[tickt])):
+                fill = DGRAY + DASH * inner_width + RESET
+                row = place(fill, calc_initial(i, 0), row)
+            for i in final_i[tickt]:
+                if not i:
+                    continue
+                i -= 1
                 fill = DASH * inner_width
-                if i == final_i[tickt] - 1:
-                    fill = fill[:-1] + '>'
-                row = place(DGRAY + fill + RESET,
-                            calc_initial(i, 0),
-                            row)
+                filltime = ftime(tickt)
+                if inner_width >= len(fill):
+                    fill = fill[:-len(filltime)] + MGRAY + filltime
+                row = place(DGRAY + fill + RESET, calc_initial(i, 0), row)
 
         if callable(iterable_or_fn):
             iterable = map(iterable_or_fn, range(table_width))
