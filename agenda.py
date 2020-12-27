@@ -7,6 +7,7 @@ import yaml
 import pickle
 import sqlite3
 import argparse
+import functools
 
 from collections import Counter, OrderedDict, defaultdict as ddict, namedtuple
 from datetime import date, datetime, time, timedelta as t, timezone
@@ -53,6 +54,58 @@ def shorten(text, inner_width):
     if len(text) > inner_width:
         text = text[:inner_width-1] + '⋯'
     return f'{text:<{inner_width}}'
+
+def bshorten(text, min_width, max_width=None):
+    if max_width is None:
+        max_width = min_width
+    text = text.rstrip()
+    l = blen(text)
+    if l > max_width:
+        tokens = tokenize(text)
+        while l > max_width - 1:
+            if not tokens.pop().startswith('\033'):
+                l -= 1
+        tokens.append('⋯')
+        return ''.join(tokens) + RESET
+    else:
+        return text + ' ' * (min_width - l)
+
+# overlay `text` onto `row` at index `offset`
+def place(text, offset, row):
+    l = blen(row)
+    if l <= offset:
+        row += ' ' * (offset - l)
+        return row + text
+    elif offset + blen(text) < l:
+        tokens = tokenize(row)
+        aftertokens = []
+        lastcode = None
+        while l > offset:
+            tok = tokens.pop()
+            aftertokens.append(tok)
+            if not tok.startswith('\033'):
+                l -= 1
+        if lastcode is None:
+            for tok in reversed(tokens):
+                if tok.startswith('\033'):
+                    lastcode = tok
+                    break
+            else:
+                lastcode = RESET
+        l = blen(text)
+        while l > 0:
+            tok = aftertokens.pop()
+            if not tok.startswith('\033'):
+                l -= 1
+            else:
+                lastcode = tok
+        return ''.join(tokens) + RESET + text + lastcode + ''.join(reversed(aftertokens))
+    else:
+        tokens = tokenize(row)
+        while l > offset:
+            if not tokens.pop().startswith('\033'):
+                l -= 1
+        return ''.join(tokens) + RESET + text
 
 def dtime(dt=None, shrink=False):
     if not dt:
@@ -375,7 +428,7 @@ class Agenda:
         # table[n][None]: list[evt]  (list of full-day events)
         # table[n][tick]: list[evt]  (list of events starting at that tick)
         actual_ndays = ndays or 1
-        table = [ddict(bool)]
+        table = [ddict(lambda: None)]
         table[0][None] = []
         for _ in range(actual_ndays):
             table.append(ddict(list))
@@ -396,7 +449,7 @@ class Agenda:
                 continue
             # timeblock event
             tickt = self.quantize(evt.start).time()
-            table[0][tickt] = True
+            table[0][tickt] = tickt
             table[index][tickt].append(evt)
 
         return table
@@ -785,6 +838,7 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False):
     return newtable
 
 def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recurring=False, zero_offset=False, interval=None):
+    now = datetime.now(tzlocal())
     table_width = week_ndays if week_ndays > 0 else 7
     interval = interval or 30
 
@@ -802,10 +856,21 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
     timecolsz = len(ftime()) + 2
     inner_width = (termsize.columns - timecolsz - (table_width + 1)) // table_width
 
+    def do_row(fill, left, mid=None, right=None, _thick=None):
+        if mid is None:
+            mid = left
+        if right is None:
+            right = left
+        line = left
+        for _ in range(table_width):
+            line += fill * inner_width + mid
+        line = line[:-1] + right
+        return LGRAY + line + RESET
+
     # full-day events part 1
     OPEN = object()
     CLOSED = object()
-    daycols = [list() for evtcol in evtcols]
+    daycols = [ddict(lambda: OPEN) for evtcol in evtcols]
     for i, evtcol in enumerate(evtcols):
         for evt in evtcol.pop(None, []):
             ndays = (evt.end - weekstart).days - i
@@ -820,19 +885,20 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
 
             summary = ' ' + evt.summary
             if evt.start < weekstart:
-                summary = '<' + summary
+                summary = '⋯' + DASH * timecolsz + summary
             if ndays > 1:
-                outlen = min((evt.end - weekstart).days, week_ndays) - i
-                outlen = outlen * (inner_width + 1) - 1
-                summary += ' ' + '-' * (outlen - len(summary) - 2) + '>'
+                outlen = ndays * (inner_width + 1) - 1
+                summary += ' ' + DASH * (outlen - len(evt.summary) - 3) + '>'
 
             daycol = subcols[0]
-            daycol.extend([OPEN] * (j - len(daycol) + 1))
+            # daycol.extend([OPEN] * (j - len(daycol) + 1))
             assert daycol[j] is OPEN
             daycol[j] = fg(agendamaker.evt2short(evt)) + summary + RESET
+            if evt.start < weekstart:
+                daycol[j] = (-(timecolsz + 1), daycol[j])
 
             for daycol in subcols[1:]:
-                daycol.extend([OPEN] * (j - len(daycol) + 1))
+                # daycol.extend([OPEN] * (j - len(daycol) + 1))
                 assert daycol[j] is OPEN
                 daycol[j] = CLOSED
 
@@ -840,79 +906,49 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
 
     newtable = []
 
+    def assemble_row(tickt, iterable_or_fn):
+        if tickt is not None:
+            row = LGRAY + ftime(tickt) + RESET
+        else:
+            row = ftime()
+        row += '  '
+        row += do_row(' ', PIPE)
+        if callable(iterable_or_fn):
+            iterable = map(iterable_or_fn, range(table_width))
+        else:
+            iterable = iterable_or_fn
+        for i, values in enumerate(iterable):
+            if not isinstance(values, tuple):
+                text = values
+                initial = 0
+            elif len(values) == 2:
+                initial, text = values
+            elif len(values) == 3:
+                i, initial, text = values
+            initial += timecolsz
+            if isinstance(text, str):
+                calc_initial = i * (inner_width + 1) + 1 + initial
+                text = bshorten(text, inner_width, termsize.columns - calc_initial)
+                row = place(text, calc_initial, row)
+        return row
+
     # date headers
-    row = ftime() + '  |'
-    for i in range(table_width):
-        row += '{:^{}}|'.format(dtime(weekstart + t(days=i)), inner_width)
-    newtable.append(row)
-
-    def bshorten(text, max_width=inner_width):
-        text = text.rstrip()
-        l = blen(text)
-        if l > max_width:
-            tokens = tokenize(text)
-            while l > max_width - 1:
-                if not tokens.pop().startswith('\033'):
-                    l -= 1
-            tokens.append('⋯')
-            return ''.join(tokens) + RESET
-        else:
-            return text + ' ' * (inner_width - l)
-
-    def place(cell, offset, row):
-        l = blen(row)
-        if l <= offset:
-            row += ' ' * (offset - l)
-            return row + cell
-        elif offset + blen(cell) < l:
-            tokens = tokenize(row)
-            aftertokens = []
-            lastcode = None
-            while l > offset:
-                tok = tokens.pop()
-                aftertokens.append(tok)
-                if not tok.startswith('\033'):
-                    l -= 1
-            if lastcode is None:
-                for tok in reversed(tokens):
-                    if tok.startswith('\033'):
-                        lastcode = tok
-                        break
-                else:
-                    lastcode = RESET
-            l = blen(cell)
-            while l > 0:
-                tok = aftertokens.pop()
-                if not tok.startswith('\033'):
-                    l -= 1
-                else:
-                    lastcode = tok
-            return ''.join(tokens) + RESET + cell + lastcode + ''.join(reversed(aftertokens))
-        else:
-            tokens = tokenize(row)
-            while l > offset:
-                if not tokens.pop().startswith('\033'):
-                    l -= 1
-            return ''.join(tokens) + RESET + cell
-
-    newtable.append(' ' * timecolsz + '_' * (table_width * (inner_width + 1) + 1))
+    def date_header(i):
+        thisdate = weekstart + t(days=i)
+        datestr = dtime(thisdate)
+        if thisdate == now.date():
+            datestr = f'> {datestr} <'
+        return '{:^{}}'.format(datestr, inner_width)
+    row = assemble_row(None, date_header)
+    newtable.append(LGRAY + row + RESET)
+    newtable.append(' ' * timecolsz + do_row(DASH, *CORNERS[1]))
 
     # full-day events part 2
     for j in range(max(map(len, daycols))):
-        row = ''
-        for i in range(table_width):
-            row = place('|', (i + 1) * (inner_width + 1) - 1, row)
-        for i, daycol in enumerate(daycols):
-            calc_initial = i * (inner_width + 1)
-            if j < len(daycol):
-                text = daycol[j]
-                if text not in (OPEN, CLOSED):
-                    text = bshorten(text, (table_width - i) * (inner_width + 1))
-                    row = place(text, calc_initial, row)
-        row = ftime() + '  |' + row
+        row = assemble_row(None, lambda i: daycols[i][j])
         newtable.append(row)
 
-    newtable.append('_' * (timecolsz + table_width * (inner_width + 1) + 1))
+    newtable.append(LGRAY + DASH * timecolsz + do_row(DASH, CORNERS[1][1], CORNERS[1][1], CORNERS[1][2]))
 
     # timeblock events
     did_first = False
@@ -921,14 +957,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
             continue
         did_first = True
 
-        row = ''
-        for i in range(table_width):
-            row = place('|', (i + 1) * (inner_width + 1) - 1, row)
-        for i, initial, text in contents[tickt]:
-            calc_initial = i * (inner_width + 1) + initial
-            text = bshorten(text, (table_width - i) * (inner_width + 1))
-            row = place(text, calc_initial, row)
-        row = ftime(tickt if timecol[tickt] else None) + '  |' + row
+        row = assemble_row(timecol[tickt], contents[tickt])
         newtable.append(row)
 
     return newtable
