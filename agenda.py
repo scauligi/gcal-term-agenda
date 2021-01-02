@@ -259,7 +259,8 @@ def download_evts():
     db = sqlite3.connect('evts.sqlite3')
     with mock_patch('pickle.dumps'):
         keys = list(_ev_entry(MagicMock()).keys())
-        db.execute(f'create table if not exists events (id PRIMARY KEY,{",".join(keys[1:])})')
+    db.execute(f'create table if not exists events (id PRIMARY KEY,{",".join(keys[1:])})')
+    # db.execute('PRAGMA journal_mode=WAL;')
     now = datetime.now(tzlocal())
     tries_remaining = 2
     while tries_remaining:
@@ -271,7 +272,15 @@ def download_evts():
             if not tries_remaining:
                 raise
             gcal.load_http_auth()
+    obj = {
+        'calendars': cals,
+        'timestamp': now,
+    }
     calmap = {cal['id']: cal for cal in cals}
+    with open('evts.yaml', 'w') as f:
+        yaml.dump(obj, f, default_flow_style=False)
+    with open('evts.pickle', 'wb') as f:
+        pickle.dump(obj, f, protocol=-1)
     allCals = get_visible_cals(cals)
     try:
         old_obj = load_evts(print_warning=False, partial=True)
@@ -333,14 +342,6 @@ def download_evts():
     print('recomputing database...')
     update_local_recurring(db)
     db.commit()
-    obj = {
-        'calendars': cals,
-        'timestamp': now,
-    }
-    with open('evts.yaml', 'w') as f:
-        yaml.dump(obj, f, default_flow_style=False)
-    with open('evts.pickle', 'wb') as f:
-        pickle.dump(obj, f, protocol=-1)
     return obj
 
 def string_outofdate(obj, now=None):
@@ -1042,8 +1043,9 @@ def server():
         while True:
             try:
                 print(datetime.now(), 'downloading...')
+                new_obj = download_evts()
                 async with obj_lock:
-                    obj = download_evts()
+                    obj = new_obj
                     obj['db'] = db
                     evt2short = make_evt2short(obj)
                     objs = (obj, evt2short)
