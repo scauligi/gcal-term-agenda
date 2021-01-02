@@ -731,7 +731,7 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False):
     table_height = 4
 
     inner_width = (termsize.columns - (table_width + 1)) // table_width
-    inner_height = ((termsize.lines - 1) - (table_height + 1)) // table_height
+    inner_height = (termsize.lines - (table_height + 1)) // table_height
 
     table = []
 
@@ -1138,7 +1138,7 @@ def main():
             if termsize.columns is None:
                 termsize = termsize._replace(columns=term_dimensions.columns)
             if termsize.lines is None:
-                termsize = termsize._replace(lines=term_dimensions.lines)
+                termsize = termsize._replace(lines=term_dimensions.lines-1)
         except OSError:
             pass
 
