@@ -72,6 +72,7 @@ def do(args):
             cmd = template_cmd
             cmd = cmd.replace('%W', str(termsize.columns))
             cmd = cmd.replace('%H', str(termsize.lines))
+            cmd = re.sub(r'%{H\+(\d+)}', lambda m: str(termsize.lines + int(m[1])), cmd)
 
             capture = subprocess.run(cmd, shell=True, capture_output=True)
             lines = capture.stdout.decode().replace('\r\n', '\n').split('\n')
