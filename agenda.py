@@ -7,6 +7,7 @@ import yaml
 import pickle
 import sqlite3
 import argparse
+import calendar
 
 from collections import Counter, OrderedDict, defaultdict as ddict, namedtuple
 from datetime import date, datetime, time, timedelta as t, timezone
@@ -757,9 +758,8 @@ DASH = "─"
 PIPE = "│"
 THICK = "█"
 
-def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False):
+def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False, table_height=4):
     table_width = 7
-    table_height = 4
 
     inner_width = (termsize.columns - (table_width + 1)) // table_width
     inner_height = (termsize.lines - (table_height + 1)) // table_height
@@ -818,7 +818,7 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False):
     cells = [(list(), list()) for _ in range(table_width * table_height)]
 
     calstart = todate - t(days=offset)
-    events = get_events(obj, todate - t(days=offset), 4 * 7, callist, local_recurring=True)
+    events = get_events(obj, todate - t(days=offset), table_width * table_height, callist, local_recurring=True)
 
     for evt in events:
         start = as_datetime(evt.start)
@@ -1112,6 +1112,7 @@ def parse_args(argv, termsize, objs=None):
     parser.add_argument('-l', '--list-calendar', action='store_true', help='print a list of events')
     parser.add_argument('-R', '--no-recurring', action='store_true', help='do not print recurring events in list')
     parser.add_argument('-x', '--four-week', action='store_true', help='print a four-week diagram')
+    parser.add_argument('-m', '--month-view', action='store_true', help='print a month diagram')
     parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
     parser.add_argument('-w', '--week-view', metavar='N', nargs='?', const=0, type=int, help='print a multi-day view (of N days)')
     parser.add_argument('date', nargs='*', help='use this date instead of today')
@@ -1122,6 +1123,7 @@ def parse_args(argv, termsize, objs=None):
     modes = 0
     modes += args.list_calendar
     modes += args.four_week
+    modes += args.month_view
     modes += args.week_view is not None
     if modes > 1:
         return ["error: cannot specify more than one major mode"]
@@ -1142,6 +1144,11 @@ def parse_args(argv, termsize, objs=None):
         table = listcal(aday, args.calendar, no_recurring=args.no_recurring, forced=forced, objs=objs)
     elif args.four_week:
         table = fourweek(aday, args.calendar, termsize=termsize, zero_offset=args.zero_offset, objs=objs)
+    elif args.month_view:
+        aday = date(aday.year, aday.month, 1)
+        firstweekday = aday.weekday() if args.zero_offset else calendar.SUNDAY
+        nweeks = len(calendar.Calendar(firstweekday).monthdayscalendar(aday.year, aday.month))
+        table = fourweek(aday, args.calendar, termsize=termsize, zero_offset=args.zero_offset, table_height=nweeks, objs=objs)
     elif args.week_view is not None:
         table = weekview(aday, args.week_view, args.calendar, termsize=termsize, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, objs=objs)
     else:
