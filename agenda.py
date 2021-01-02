@@ -1033,7 +1033,7 @@ def server():
     if os.path.exists(SOCK):
         # not a race since we check again later
         raise Exception(SOCK + ' already exists')
-    obj_lock = asyncio.Lock()
+    obj_lock = None
     objs = load_evts(print_warning=True)
     db = objs[0]['db']
 
@@ -1067,6 +1067,8 @@ def server():
         writer.close()
         await writer.wait_closed()
     async def start_server():
+        nonlocal obj_lock
+        obj_lock = asyncio.Lock()
         timer = asyncio.create_task(download_loop())
         if os.path.exists(SOCK):
             # XXX could race
