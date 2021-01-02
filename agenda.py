@@ -48,6 +48,7 @@ LGRAY = fg(250)
 MGRAY = fg(237)
 DGRAY = fg(235)
 RESET = '\033[0m'
+WBOLD = '\033[0;1m'
 
 def blen(line):
     return len(re.sub('\033.*?m', '', line))
@@ -576,7 +577,7 @@ class Agenda:
 
         # if there are no actual events
         if not any(evtcol.items()):
-            newtable.append(f'{dtime(self.todate)} {LGRAY}{timefield}  no events{RESET}')
+            newtable.append(f'{LGRAY}{dtime(self.todate)} {timefield}  no events{RESET}')
             return newtable
 
         # print each full-day
@@ -592,9 +593,9 @@ class Agenda:
                     startspan = dtime(evt.start, shrink=True) + ' '
                 if lastdate != self.todate:
                     endspan = ' ' + dtime(lastdate, shrink=True)
-                span = ' ({}->{})'.format(startspan, endspan)
-            summary = fg(self.evt2short(evt)) + evt.summary + RESET
-            newtable.append([timefield, summary + span])
+                span = LGRAY + ' ({}->{})'.format(startspan, endspan)
+            summary = fg(self.evt2short(evt)) + evt.summary
+            newtable.append([timefield, summary + span + RESET])
 
         # whether to do "now" arrow
         is_todate = self.now.date() == self.todate
@@ -640,7 +641,7 @@ class Agenda:
         # compile newtable
         newtable = [[dtime(), *line] for line in newtable]
         newtable[0][0] = dtime(self.todate)
-        newtable = [f'{line[0]} {line[1]}  {line[2]}' for line in newtable]
+        newtable = [f'{LGRAY}{line[0]} {line[1]}  {line[2]}{RESET}' for line in newtable]
 
         # collect status messages
         if timecol[None]:
@@ -703,11 +704,12 @@ def listcal(todate, calendars, no_recurring=False, forced=False, objs=None):
         if s:
             table.append(fg(4) + s + RESET)
         dark = isinstance(evt.end, datetime) and evt.end < now
+        gray = fg(8) if dark else LGRAY
         white = fg(8) if dark else ''
         fmt = '  '
-        fmt += white + dtime(evt.start) + RESET
+        fmt += gray + dtime(evt.start) + RESET
         fmt += ' '
-        fmt += white + ftime(evt.start if isinstance(evt.start, datetime) else None)
+        fmt += gray + ftime(evt.start if isinstance(evt.start, datetime) else None)
         fmt += ' '
         fmt += fg(evt2short(evt, dark=dark)) + evt.summary + RESET
         fmt += ' '
@@ -824,7 +826,7 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False):
                     dcolor = LGRAY
                     if celldate == now.date():
                         datetext = f'> {datetext} <'
-                        dcolor = RESET
+                        dcolor = WBOLD
                     text = dcolor + shorten(f'{datetext:^{inner_width}}', inner_width) + RESET
                 elif l == 1:
                     text = LGRAY + DASH * inner_width + RESET
@@ -898,14 +900,12 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
                 summary += ' ' + DASH * (outlen - len(evt.summary) - 3) + '>'
 
             daycol = subcols[0]
-            # daycol.extend([OPEN] * (j - len(daycol) + 1))
             assert daycol[j] is OPEN
             daycol[j] = fg(agendamaker.evt2short(evt)) + summary + RESET
             if evt.start < weekstart:
                 daycol[j] = (-(timecolsz + 1), daycol[j])
 
             for daycol in subcols[1:]:
-                # daycol.extend([OPEN] * (j - len(daycol) + 1))
                 assert daycol[j] is OPEN
                 daycol[j] = CLOSED
 
@@ -975,10 +975,12 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
     def date_header(i):
         thisdate = weekstart + t(days=i)
         datestr = dtime(thisdate)
+        dcolor = LGRAY
         if thisdate == now.date():
             datestr = f'> {datestr} <'
+            dcolor = WBOLD
         datestr = '{:^{}}'.format(datestr, inner_width)
-        return LGRAY + datestr + RESET
+        return dcolor + datestr + RESET
     newtable.append(assemble_row(None, date_header))
 
     # assemble full-day events
