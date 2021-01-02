@@ -484,7 +484,9 @@ class Agenda:
         while tickt <= max(max(col.keys(), default=time()) for col in cols):
             yield tickt
             minutes += self.interval.seconds // 60
-            tickt = time(minutes // 60, minutes % 60)
+            if minutes >= 24 * 60:
+                break
+            tickt = time(*divmod(minutes, 60))
 
     # convenience for looping until an end time
     def _until(self, starttick, endtick):
