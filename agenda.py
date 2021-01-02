@@ -1051,7 +1051,7 @@ def server():
                 print(datetime.now(), 'loaded ok')
             except Exception as e:
                 print('download loop:', e)
-            await asyncio.sleep(5*60)
+            await asyncio.sleep(15*60)
     async def handle_connection(reader, writer):
         nonlocal objs
         nonlocal obj_lock
