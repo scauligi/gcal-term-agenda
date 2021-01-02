@@ -231,8 +231,23 @@ def _ev_entry(ev):
         'calendar': ev.calendar,
         'hastime': isinstance(ev.start, datetime),
         'root_id': ev._e.get('recurringEventId', ev.id),
+        'local_recurring': None,
         'blob': pickle.dumps(ev, protocol=-1),
     }
+
+def update_local_recurring(db):
+    db.execute('''
+with local_recur (id, count) as (
+        select a.id, count(*) from events a
+        left join events b on a.root_id = b.root_id
+            and date(b.startdate) >= date(a.startdate, "-14 days")
+            and date(b.startdate) <= date(a.startdate, "+14 days")
+        group by a.id
+) update events
+set local_recurring = local_recur.count > 1
+from local_recur
+where events.id = local_recur.id
+''')
 
 def download_evts():
     db = sqlite3.connect('evts.sqlite3')
@@ -309,6 +324,9 @@ def download_evts():
                 calmap[calId]['syncToken'] = r['nextSyncToken']
             break
         db.commit()
+    print('recomputing database...')
+    update_local_recurring(db)
+    db.commit()
     obj = {
         'calendars': cals,
         'timestamp': now,
@@ -374,35 +392,35 @@ def make_evt2short(obj):
 
 def get_events(obj, todate, ndays, callist, local_recurring=False):
     events = []
-    if ndays >= 0:
-        todates = (todate, todate, ndays)
-        ndays_clause = 'and date(a.startdate) < date(?, "+" || ? || " days")'
-    else:
-        todates = (todate,)
-        ndays_clause = ''
-    local_recurring_clause = ''
-    if local_recurring:
-        local_recurring_clause = '''
-              left join events b on a.root_id = b.root_id
-                    and date(b.startdate) >= date(a.startdate, "-14 days")
-                    and date(b.startdate) <= date(a.startdate, "+14 days")'''
     callist = list(set(callist))
-    rows = obj['db'].execute(f"""
-          select a.id,a.blob,count(*) from events a
-          {local_recurring_clause}
-          where
-                date(a.enddate) >= date(?)
-                 {ndays_clause}
-             and not a.cancelled
-             and a.calendar in ({','.join("?"*len(callist))})
-            group by a.id
-            order by a.startdate, a.hastime, datetime(a.start)
-    """, (*todates,
-          *callist))
-    for _, blob, count in rows:
+
+    if ndays >= 0:
+        rows = obj['db'].execute(f"""
+              select id,blob,local_recurring,start from events
+              where
+                    date(enddate) >= date(?)
+                    and date(startdate) < date(?, "+" || ? || " days")
+                 and not cancelled
+                 and calendar in ({','.join("?"*len(callist))})
+                order by startdate, hastime, datetime(start)
+        """, (todate, todate, ndays,
+              *callist))
+    else:
+        rows = obj['db'].execute(f"""
+              select root_id,blob,local_recurring,min(start) from events
+              where
+                    date(enddate) >= date(?)
+                 and not cancelled
+                 and calendar in ({','.join("?"*len(callist))})
+                group by root_id
+                order by startdate, hastime, datetime(start)
+        """, (todate,
+              *callist))
+
+    for _, blob, recurs_locally, _ in rows:
         ev = pickle.loads(blob)
         if local_recurring:
-            ev.recurring = count > 1
+            ev.recurring = recurs_locally
         events.append(ev)
     return events
 
