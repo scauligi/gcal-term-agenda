@@ -277,10 +277,6 @@ def download_evts():
         'timestamp': now,
     }
     calmap = {cal['id']: cal for cal in cals}
-    with open('evts.yaml', 'w') as f:
-        yaml.dump(obj, f, default_flow_style=False)
-    with open('evts.pickle', 'wb') as f:
-        pickle.dump(obj, f, protocol=-1)
     allCals = get_visible_cals(cals)
     try:
         old_obj = load_evts(print_warning=False, partial=True)
@@ -339,6 +335,10 @@ def download_evts():
                 calmap[calId]['syncToken'] = r['nextSyncToken']
             break
         db.commit()
+    with open('evts.yaml', 'w') as f:
+        yaml.dump(obj, f, default_flow_style=False)
+    with open('evts.pickle', 'wb') as f:
+        pickle.dump(obj, f, protocol=-1)
     print('recomputing database...')
     update_local_recurring(db)
     db.commit()
@@ -602,9 +602,16 @@ class Agenda:
         # expect table with only [0] and [1] columns
         timecol, evtcol = table
 
+        # whether to do "now" arrow
+        is_todate = self.now.date() == self.todate
+
         # if there are no actual events
         if not any(evtcol.items()):
             newtable.append(f'{LGRAY}{dtime(self.todate)} {timefield}  no events{RESET}')
+            # place the "now" arrow
+            if is_todate:
+                newtable.append(f'{dtime()} {ftime()}    <-- ' + ftime(self.now, now=True))
+
             return newtable
 
         # print each full-day
@@ -623,9 +630,6 @@ class Agenda:
                 span = LGRAY + ' ({}->{})'.format(startspan, endspan)
             summary = fg(self.evt2short(evt)) + evt.summary
             newtable.append([timefield, summary + span + RESET])
-
-        # whether to do "now" arrow
-        is_todate = self.now.date() == self.todate
 
         contents = self._evtcol(evtcol, forced=forced, nowtick=nowtick)
 
