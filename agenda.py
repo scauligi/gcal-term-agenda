@@ -7,7 +7,6 @@ import yaml
 import pickle
 import sqlite3
 import argparse
-import functools
 
 from collections import Counter, OrderedDict, defaultdict as ddict, namedtuple
 from datetime import date, datetime, time, timedelta as t, timezone
