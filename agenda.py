@@ -153,6 +153,13 @@ def tdtime(td):
         s += 's' if minutes != 1 else ''
     return s
 
+def base_datetime(thedate, thetime=None):
+    if thetime is None:
+        thetime = time()
+    if (tzinfo := getattr(thedate, 'tzinfo', None)) is None:
+        tzinfo = tzlocal()
+    return datetime.combine(thedate, thetime, tzinfo)
+
 def as_date(date_or_datetime, endtime=False):
     if isinstance(date_or_datetime, datetime):
         return date_or_datetime.date()
@@ -160,7 +167,7 @@ def as_date(date_or_datetime, endtime=False):
 
 def as_datetime(date_or_datetime):
     if isinstance(date_or_datetime, date) and not isinstance(date_or_datetime, datetime):
-        return datetime.combine(date_or_datetime, time(0), tzlocal())
+        return base_datetime(date_or_datetime)
     return date_or_datetime
 
 # this exists purely because pyyaml is stupid
@@ -526,7 +533,7 @@ class Agenda:
         contents = ddict(list)  # tick -> (col_index, initial, summary)
         for tickt in self._intervals(*evtcols):
             for col_index, evtcol in enumerate(evtcols):
-                tick = datetime.combine(self.todate + t(days=col_index), tickt, tzlocal())
+                tick = base_datetime(self.todate + t(days=col_index), tickt)
                 tock = tick + self.interval
 
                 for evt in evtcol[tickt]:
@@ -630,7 +637,7 @@ class Agenda:
 
         # assemble newtable from contents
         for tickt in self._intervals(contents):
-            tick = datetime.combine(self.todate, tickt, tzlocal())
+            tick = base_datetime(self.todate, tickt)
 
             # skip blank slots until the first event
             if not did_first and not timecol[tickt] and not (is_todate and tick == nowtick):
@@ -678,7 +685,7 @@ class Agenda:
 
 
 def listcal(todate, calendars, no_recurring=False, forced=False, objs=None):
-    today = datetime.combine(todate, time(0), tzlocal())
+    today = base_datetime(todate)
     now = datetime.now(tzlocal())
     obj, evt2short = objs
 
@@ -691,9 +698,9 @@ def listcal(todate, calendars, no_recurring=False, forced=False, objs=None):
     weekday = todate.isoweekday() % 7
     nextsunday = 7 - weekday
     nextmonth = date(today.year + today.month // 12, today.month % 12 + 1, 1)
-    nextmonth = datetime.combine(nextmonth, time(0), tzlocal())
+    nextmonth = base_datetime(nextmonth)
     follmonth = date(today.year + (today.month + 1) // 12, (today.month + 1) % 12 + 1, 1)
-    follmonth = datetime.combine(follmonth, time(0), tzlocal())
+    follmonth = base_datetime(follmonth)
 
     highwater = [
         (None,                              '== ONGOING =='),
@@ -755,7 +762,7 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False):
 
     table = []
 
-    today = datetime.combine(todate, time(0), tzlocal())
+    today = base_datetime(todate)
     offset = todate.isoweekday() % 7
     rev_offset = 0
     if zero_offset:
