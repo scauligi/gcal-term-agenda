@@ -583,7 +583,7 @@ class Agenda:
                                 text = '-+- ({}) '.format(ftime(evt.end).strip())
                             else:
                                 text = ' |  '
-                            if endtick == endtock:
+                            if endtick == tock:
                                 text += evt.location + '  '
                             text = fg(self.evt2short(evt)) + text + RESET
                             contents[endtick.time()].append((col_index, initial, text))
