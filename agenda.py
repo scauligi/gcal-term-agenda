@@ -348,7 +348,7 @@ def download_evts():
 def string_outofdate(obj, now=None):
     if not now:
         now = datetime.now(tzlocal())
-    if obj['timestamp'] + t(minutes=6) < now:
+    if obj['timestamp'] + t(minutes=16) < now:
         return fg(3) + 'Warning: timestamp is out of date by ' + tdtime(now - obj['timestamp']) + RESET
     return None
 
@@ -367,7 +367,7 @@ def load_evts(*, print_warning=False, partial=False):
             #     evt.end = localize(evt.end)
         if obj['timestamp'] > now:
             print(obj['timestamp'])
-        elif obj['timestamp'] + t(minutes=5) < now:
+        elif obj['timestamp'] + t(minutes=15) < now:
             if print_warning:
                 print('timestamp out of date', file=sys.stderr)
     except FileNotFoundError:
@@ -649,6 +649,9 @@ class Agenda:
                 continue
             # skip blank slots after the last event
             if tickt > lasttick and not (is_todate and tick == nowtick):
+                continue
+            # skip blank slots today before "now"
+            if is_todate and tick < nowtick and not timecol[tickt]:
                 continue
 
             # print tick time for event starts
