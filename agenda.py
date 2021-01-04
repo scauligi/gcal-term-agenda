@@ -892,7 +892,6 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False, tab
     return newtable
 
 def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recurring=False, zero_offset=False, interval=None):
-    now = datetime.now(tzlocal())
     table_width = week_ndays if week_ndays > 0 else 7
     interval = interval or 30
 
@@ -906,6 +905,9 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
 
     agendamaker = Agenda(calendars, objs=objs, dark_recurring=dark_recurring, interval=interval)
     timecol, *evtcols = agendamaker.agenda_table(weekstart, ndays=table_width)
+
+    has_todate = (agendamaker.now.date() - weekstart).days < week_ndays
+    nowtick = agendamaker.quantize(agendamaker.now).time()
 
     timecolsz = len(ftime()) + 2
     inner_width = (termsize.columns - timecolsz - (table_width + 1)) // table_width
@@ -967,24 +969,24 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
             timestr = '{:>{}}'.format(ftime(tickt).strip() + ' ', timecolsz)
         return LGRAY + timestr + line + RESET
 
-    def assemble_row(tickt, iterable_or_fn):
+    def assemble_row(tickt, iterable_or_fn, row=None):
         def calc_initial(i, initial):
             return i * (inner_width + 1) + 1 + initial + timecolsz
 
-        row = do_row(tickt, ' ', PIPE)
-        if not isinstance(tickt, str) and tickt:
-            for i in range(max(final_i[tickt])):
+        if row is None:
+            row = do_row(tickt, ' ', PIPE)
+            if not isinstance(tickt, str) and tickt:
+                max_index = max(final_i[tickt])
                 fill = DGRAY + DASH * inner_width + RESET
-                row = place(fill, calc_initial(i, 0), row)
+                for i in range(max_index):
+                    row = place(fill, calc_initial(i, 0), row)
+
+        if not isinstance(tickt, str) and tickt:
             for i in final_i[tickt]:
                 if not i:
                     continue
-                i -= 1
-                fill = DASH * inner_width
                 filltime = ' ' + ftime(tickt).strip() + ' '
-                if inner_width >= len(fill):
-                    fill = fill[:-len(filltime)] + MGRAY + filltime
-                row = place(DGRAY + fill + RESET, calc_initial(i, 0), row)
+                row = place(MGRAY + filltime + RESET, calc_initial(i, -(len(filltime) + 1)), row)
 
         if callable(iterable_or_fn):
             iterable = map(iterable_or_fn, range(table_width))
@@ -1010,7 +1012,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
         thisdate = weekstart + t(days=i)
         datestr = dtime(thisdate)
         dcolor = LGRAY
-        if thisdate == now.date():
+        if thisdate == agendamaker.now.date():
             datestr = f'> {datestr} <'
             dcolor = WBOLD
         datestr = '{:^{}}'.format(datestr, inner_width)
@@ -1028,7 +1030,12 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
     # assemble timeblocks
     newtable.append(do_row(DASH, DASH, CORNERS[1][1], *CORNERS[1][1:]))
     for tickt in agendamaker._intervals(contents, start_min=True):
-        newtable.append(assemble_row(timecol[tickt], contents[tickt]))
+        row = None
+        if has_todate and tickt == nowtick:
+            timestr = '{:>{}}'.format('({})'.format(ftime(agendamaker.now, now=True).strip()), timecolsz)
+            pipeline = (LGRAY + PIPE + RESET + DASH * inner_width) * table_width + LGRAY + PIPE
+            row = timestr + pipeline + RESET
+        newtable.append(assemble_row(timecol[tickt], contents[tickt], row))
 
     return newtable
 
