@@ -78,7 +78,7 @@ def brstrip(text):
     tokens = tokenize(text)
     while tokens and _strippable(tokens[-1]):
         tokens.pop()
-    return ''.join(tokens)
+    return ''.join(tokens) + RESET
 
 # overlay `text` onto `row` at index `offset`
 def place(text, offset, row):
@@ -673,7 +673,7 @@ class Agenda:
             if tickt > lasttick and not (is_todate and tick == nowtick):
                 continue
             # skip blank slots today before "now" (if not forced)
-            if not forced and is_todate and tick < nowtick and not timecol[tickt]:
+            if not forced and is_todate and tick < nowtick and not contents[tickt]:
                 continue
 
             # print tick time for event starts
