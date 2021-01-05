@@ -34,7 +34,6 @@ def tokenize(line):
     return tokens
 
 def linesplit(oldtokenlines, columns):
-    # TODO: decode tab spacing
     counter = 0
     tokenlines = []
     for tokens in oldtokenlines:
@@ -43,6 +42,12 @@ def linesplit(oldtokenlines, columns):
         for token in tokens:
             if token.startswith('\033'):
                 tokenlines[-1].append(token)
+            elif token == '\t':
+                counter += 1
+                tokenlines[-1].append(' ')
+                while counter % 8:
+                    counter += 1
+                    tokenlines[-1].append(' ')
             else:
                 if counter == columns:
                     counter = 0
@@ -59,7 +64,7 @@ def quote(s):
     return s
 
 def do(args):
-    cmd = args.command
+    cmd = ' '.join(args.command)
     if args.interactive_shell:
         cmd = f'bash -ic "{quote(cmd)}"'
     if args.pseudo_terminal:
@@ -79,6 +84,9 @@ def do(args):
             lines += capture.stderr.decode().replace('\r\n', '\n').split('\n')
             while lines and (not lines[-1] or lines[-1].isspace()):
                 lines.pop()
+
+            if args.debug:
+                lines = list(map(repr, lines))
 
             tokenlines = [tokenize(line) for line in lines]
             lines = linesplit(tokenlines, termsize.columns)
@@ -141,8 +149,11 @@ if __name__ == '__main__':
     parser.add_argument('-N', '--on-minute', metavar='minute(s)', action='store', type=int, help='update every N minutes on the minute')
     parser.add_argument('-t', '--pseudo-terminal', action='store_true', help='run command using `script` to fake a TTY')
     parser.add_argument('-i', '--interactive-shell', action='store_true', help='run command using `bash -i`')
-    parser.add_argument('command')
+    parser.add_argument('--debug', action='store_true', help='print repr instead of lines')
+    parser.add_argument('command', nargs='*')
+
     args = parser.parse_args()
+
     if args.on_minute:
         if 60 % args.on_minute:
             print('no')
