@@ -72,6 +72,14 @@ def bshorten(text, max_width):
         return ''.join(tokens) + RESET
     return text
 
+def _strippable(token):
+    return token.isspace() or token.startswith('\033')
+def brstrip(text):
+    tokens = tokenize(text)
+    while tokens and _strippable(tokens[-1]):
+        tokens.pop()
+    return ''.join(tokens)
+
 # overlay `text` onto `row` at index `offset`
 def place(text, offset, row):
     l = blen(row)
@@ -700,7 +708,7 @@ class Agenda:
 
     @staticmethod
     def print_table(table):
-        lines = '\n'.join(line.rstrip() for line in table)
+        lines = '\n'.join(brstrip(line) for line in table)
         lines = re.sub(r'\n{8,}', r'\n'*8, lines)
         lines = re.sub(r'\n*$', '', lines)
         print(lines)
