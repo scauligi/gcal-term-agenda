@@ -85,6 +85,7 @@ class Event:
     def __init__(self, summary='', location=''):
         self.summary = summary
         self.location = location
+        self.link = None
         self.start = None
         self.end = None
         self.recurrence = None
@@ -105,6 +106,14 @@ class Event:
             pkgd['recurrence'] = self.recurrence
         return pkgd
 
+    @property
+    def calendar(self):
+        return self._e.get('calId')
+
+    @calendar.setter
+    def calendar(self, value):
+        self._e['calId'] = value
+
     @classmethod
     def unpkg(cls, e):
         evt = cls(e['summary'])
@@ -113,11 +122,11 @@ class Event:
                 evt.cancelled = True
         if 'location' in e:
             evt.location = e['location']
-        elif 'hangoutLink' in e:
-            evt.location = e['hangoutLink']
+        if 'hangoutLink' in e:
+            evt.link = e['hangoutLink']
         elif 'description' in e:
             if m := re.search(r'(https://[^\s<>"]*)', e['description']):
-                evt.location = m.group(1)
+                evt.link = m.group(1)
         if 'iCalUID' in e:
             evt.uid = e['iCalUID']
         if 'recurringEventId' in e:

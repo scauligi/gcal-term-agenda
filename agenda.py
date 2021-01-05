@@ -239,7 +239,7 @@ def _ev_entry(ev):
         'hastime': isinstance(ev.start, datetime),
         'root_id': ev._e.get('recurringEventId', ev.id),
         'local_recurring': None,
-        'blob': pickle.dumps(ev, protocol=-1),
+        'blob': pickle.dumps(ev._e, protocol=-1),
     }
 
 def update_local_recurring(db):
@@ -426,7 +426,7 @@ def get_events(obj, todate, ndays, callist, local_recurring=False):
               *callist))
 
     for _, blob, recurs_locally, _ in rows:
-        ev = pickle.loads(blob)
+        ev = Event.unpkg(pickle.loads(blob))
         if local_recurring:
             ev.recurring = recurs_locally
         events.append(ev)
@@ -521,7 +521,7 @@ class Agenda:
             yield tick
             tick += self.interval
 
-    def _evtcol(self, *evtcols, forced, nowtick=None):
+    def _evtcol(self, *evtcols, forced, locations, nowtick=None):
         # whether to show anchors/endings and location or not
         def _expand(evt):
             if forced:
@@ -542,6 +542,13 @@ class Agenda:
                     summary = evt.summary
                     endtext = ''
 
+                    if locations:
+                        locstrs = []
+                        if evt.location:
+                            locstrs.append(evt.location)
+                        if evt.link:
+                            locstrs.append(evt.link)
+
                     # display true start time if necessary
                     if evt.start != tick:
                         endtext += ' ({})'.format(ftime(evt.start).strip())
@@ -557,7 +564,13 @@ class Agenda:
                                 else:
                                     endtext += ' (-> {})'
                                 endtext = endtext.format(ftime(evt.end).strip())
-                            endtext = ' ' + evt.location + endtext
+                        if locations:
+                            remaining_ticks = (self.quantize(evt.end) - tock).seconds // self.interval.seconds
+                            locstrs_to_join = max(len(locstrs) - remaining_ticks, 0)
+                            locstr = ' '.join(locstrs[:locstrs_to_join])
+                            if locstr:
+                                endtext = ' ' + locstr + endtext
+                            locstrs = locstrs[locstrs_to_join:]
 
                     summary = fg(self.evt2short(evt)) + summary + endtext + RESET + '   '
 
@@ -583,8 +596,9 @@ class Agenda:
                                 text = '-+- ({}) '.format(ftime(evt.end).strip())
                             else:
                                 text = ' |  '
-                            if endtick == tock:
-                                text += evt.location + '  '
+                            if locations:
+                                if locstrs:
+                                    text += locstrs.pop(0) + '  '
                             text = fg(self.evt2short(evt)) + text + RESET
                             contents[endtick.time()].append((col_index, initial, text))
                             endtick += self.interval
@@ -632,7 +646,7 @@ class Agenda:
             summary = fg(self.evt2short(evt)) + evt.summary
             newtable.append([timefield, summary + span + RESET])
 
-        contents = self._evtcol(evtcol, forced=forced, nowtick=nowtick)
+        contents = self._evtcol(evtcol, forced=forced, nowtick=nowtick, locations=True)
 
         lasttick = max(contents.keys(), default=time())
         if is_todate:
@@ -650,8 +664,8 @@ class Agenda:
             # skip blank slots after the last event
             if tickt > lasttick and not (is_todate and tick == nowtick):
                 continue
-            # skip blank slots today before "now"
-            if is_todate and tick < nowtick and not timecol[tickt]:
+            # skip blank slots today before "now" (if not forced)
+            if not forced and is_todate and tick < nowtick and not timecol[tickt]:
                 continue
 
             # print tick time for event starts
@@ -950,7 +964,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
         for tickt in evtcol:
             final_i[tickt].add(i)
 
-    contents = agendamaker._evtcol(*evtcols, forced=True)
+    contents = agendamaker._evtcol(*evtcols, forced=True, locations=False)
 
     newtable = []
 
@@ -1033,7 +1047,14 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
         row = None
         if has_todate and tickt == nowtick:
             timestr = '{:>{}}'.format('({})'.format(ftime(agendamaker.now, now=True).strip()), timecolsz)
-            pipeline = (LGRAY + PIPE + RESET + DASH * inner_width) * table_width + LGRAY + PIPE
+            nowtime = ftime(agendamaker.now, now=True).strip()
+            nowtime_centered = f'{nowtime:^{inner_width}}'
+            nowdex = len(nowtime_centered) - len(nowtime_centered.lstrip())
+            cell = fg(66) + DASH * inner_width
+            cell = place(fg(66) + nowtime, nowdex, cell)
+            pipeline = (LGRAY + PIPE + cell) * table_width + LGRAY + PIPE
+            pipeline = LGRAY + PIPE + (cell + DASH) * table_width
+            pipeline = pipeline[:-1] + LGRAY + PIPE
             row = timestr + pipeline + RESET
         newtable.append(assemble_row(timecol[tickt], contents[tickt], row))
 
