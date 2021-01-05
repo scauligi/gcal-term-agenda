@@ -47,6 +47,7 @@ def fg(short):
 LGRAY = fg(250)
 MGRAY = fg(237)
 DGRAY = fg(235)
+NOWLINE_COLOR = fg(66)
 RESET = '\033[0m'
 WBOLD = '\033[0;1m'
 
@@ -1057,9 +1058,9 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
             timestr = '{:>{}}'.format('({})'.format(ftime(agendamaker.now, now=True).strip()), timecolsz)
             nowtime = ftime(agendamaker.now, now=True).strip()
             nowtime_centered = f'{nowtime:^{inner_width}}'
-            nowdex = len(nowtime_centered) - len(nowtime_centered.lstrip())
-            cell = fg(66) + DASH * inner_width
-            cell = place(fg(66) + nowtime, nowdex, cell)
+            nowdex = max(len(nowtime_centered) - len(nowtime_centered.lstrip()) - 1, 0)
+            cell = NOWLINE_COLOR + DASH * inner_width
+            cell = place(NOWLINE_COLOR + f' {nowtime} ', nowdex, cell)
             pipeline = (LGRAY + PIPE + cell) * table_width + LGRAY + PIPE
             pipeline = LGRAY + PIPE + (cell + DASH) * table_width
             pipeline = pipeline[:-1] + LGRAY + PIPE
