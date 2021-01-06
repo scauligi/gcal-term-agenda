@@ -929,7 +929,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
     agendamaker = Agenda(calendars, objs=objs, dark_recurring=dark_recurring, interval=interval)
     timecol, *evtcols = agendamaker.agenda_table(weekstart, ndays=table_width)
 
-    has_todate = (agendamaker.now.date() - weekstart).days < week_ndays
+    has_todate = 0 <= (agendamaker.now.date() - weekstart).days < week_ndays
     nowtick = agendamaker.quantize(agendamaker.now).time()
 
     timecolsz = len(ftime()) + 2
