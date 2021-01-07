@@ -66,7 +66,7 @@ def bshorten(text, max_width):
     l = blen(text)
     if l > max_width:
         tokens = tokenize(text)
-        while l > max_width - 1:
+        while tokens and l > max_width - 1:
             if not tokens.pop().startswith('\033'):
                 l -= 1
         tokens.append('⋯')
@@ -934,6 +934,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
 
     timecolsz = len(ftime()) + 2
     inner_width = (termsize.columns - timecolsz - (table_width + 1)) // table_width
+    inner_width = max(inner_width, 0)
 
     # full-day events part 1
     OPEN = object()
@@ -1003,6 +1004,9 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
                 fill = DGRAY + DASH * inner_width + RESET
                 for i in range(max_index):
                     row = place(fill, calc_initial(i, 0), row)
+        else:
+            timestr = '{:>{}}'.format(ftime(tickt).strip() + ' ', timecolsz)
+            row = timestr + row
 
         if not isinstance(tickt, str) and tickt:
             for i in final_i[tickt]:
