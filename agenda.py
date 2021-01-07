@@ -1055,16 +1055,13 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
     for tickt in agendamaker._intervals(contents, start_min=True):
         row = None
         if has_todate and tickt == nowtick:
-            timestr = '{:>{}}'.format('({})'.format(ftime(agendamaker.now, now=True).strip()), timecolsz)
             nowtime = ftime(agendamaker.now, now=True).strip()
             nowtime_centered = f'{nowtime:^{inner_width}}'
             nowdex = max(len(nowtime_centered) - len(nowtime_centered.lstrip()) - 1, 0)
-            cell = NOWLINE_COLOR + DASH * inner_width
-            cell = place(NOWLINE_COLOR + f' {nowtime} ', nowdex, cell)
-            pipeline = (LGRAY + PIPE + cell) * table_width + LGRAY + PIPE
-            pipeline = LGRAY + PIPE + (cell + DASH) * table_width
+            pipeline = LGRAY + PIPE + NOWLINE_COLOR + DASH * (inner_width + 1) * table_width
             pipeline = pipeline[:-1] + LGRAY + PIPE
-            row = timestr + pipeline + RESET
+            pipeline = place(NOWLINE_COLOR + f' {nowtime} ', (inner_width + 1) * offset + nowdex + 1, pipeline)
+            row = pipeline + RESET
         newtable.append(assemble_row(timecol[tickt], contents[tickt], row))
 
     return newtable
