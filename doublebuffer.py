@@ -173,6 +173,7 @@ async def timer(args):
 
 async def slow_repaint():
     await repaint_queue.put(True)
+    await asyncio.sleep(0.2)
     await run_cmd_queue.put(True)
 
 # callback
