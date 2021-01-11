@@ -709,9 +709,10 @@ class Agenda:
 
     @staticmethod
     def print_table(table):
+        newline = '(\n(' + re.escape(RESET) + ')?)'
         lines = '\n'.join(brstrip(line) for line in table)
-        lines = re.sub(r'\n{8,}', r'\n'*8, lines)
-        lines = re.sub(r'\n*$', '', lines)
+        lines = re.sub(newline + r'{9,}', r'\n'*9 + RESET, lines)
+        lines = re.sub(newline + r'*$', '', lines)
         print(lines)
 
 
@@ -932,7 +933,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
     has_todate = 0 <= (agendamaker.now.date() - weekstart).days < week_ndays
     nowtick = agendamaker.quantize(agendamaker.now).time()
 
-    timecolsz = len(ftime()) + 2
+    timecolsz = len(ftime()) + 1
     inner_width = (termsize.columns - timecolsz - (table_width + 1)) // table_width
     inner_width = max(inner_width, 0)
 
