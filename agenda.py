@@ -554,9 +554,9 @@ class Agenda:
                     if locations:
                         locstrs = []
                         if evt.location:
-                            locstrs.append(evt.location)
+                            locstrs.append(' '.join(evt.location.split()))
                         if evt.link and evt.link not in locstrs:
-                            locstrs.append(evt.link)
+                            locstrs.append(' '.join(evt.link.split()))
 
                     # display true start time if necessary
                     if evt.start != tick:
