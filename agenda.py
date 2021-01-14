@@ -785,7 +785,7 @@ DASH = "─"
 PIPE = "│"
 THICK = "█"
 
-def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False, table_height=4):
+def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False, table_height=4, no_recurring=False):
     table_width = 7
 
     inner_width = (termsize.columns - (table_width + 1)) // table_width
@@ -848,6 +848,8 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False, tab
     events = get_events(obj, todate - t(days=offset), table_width * table_height, callist, local_recurring=True)
 
     for evt in events:
+        if no_recurring and evt.recurring:
+            continue
         start = as_datetime(evt.start)
         end = as_datetime(evt.end)
         cellnum = (start.date() - calstart).days
@@ -1183,16 +1185,33 @@ def parse_args(argv, termsize, objs=None):
         objs = load_evts()
 
     if args.list_calendar:
-        table = listcal(aday, args.calendar, no_recurring=args.no_recurring, forced=forced, objs=objs)
+        table = listcal(aday, args.calendar,
+                        no_recurring=args.no_recurring,
+                        forced=forced,
+                        objs=objs)
     elif args.four_week:
-        table = fourweek(aday, args.calendar, termsize=termsize, zero_offset=args.zero_offset, objs=objs)
+        table = fourweek(aday, args.calendar,
+                         termsize=termsize,
+                         zero_offset=args.zero_offset,
+                         no_recurring=args.no_recurring,
+                         objs=objs)
     elif args.month_view:
         aday = date(aday.year, aday.month, 1)
         firstweekday = aday.weekday() if args.zero_offset else calendar.SUNDAY
         nweeks = len(calendar.Calendar(firstweekday).monthdayscalendar(aday.year, aday.month))
-        table = fourweek(aday, args.calendar, termsize=termsize, zero_offset=args.zero_offset, table_height=nweeks, objs=objs)
+        table = fourweek(aday, args.calendar,
+                         termsize=termsize,
+                         zero_offset=args.zero_offset,
+                         table_height=nweeks,
+                         no_recurring=args.no_recurring,
+                         objs=objs)
     elif args.week_view is not None:
-        table = weekview(aday, args.week_view, args.calendar, termsize=termsize, dark_recurring=args.no_recurring, zero_offset=args.zero_offset, interval=args.interval, objs=objs)
+        table = weekview(aday, args.week_view, args.calendar,
+                         termsize=termsize,
+                         dark_recurring=args.no_recurring,
+                         zero_offset=args.zero_offset,
+                         interval=args.interval,
+                         objs=objs)
     else:
         agendamaker = Agenda(args.calendar, objs=objs, interval=args.interval)
         cols = agendamaker.agenda_table(aday)
