@@ -67,9 +67,13 @@ def bshorten(text, max_width):
     if l > max_width:
         tokens = tokenize(text)
         while tokens and l > max_width - 1:
-            if not tokens.pop().startswith('\033'):
+            if not (lastchar := tokens.pop()).startswith('\033'):
                 l -= 1
-        tokens.append('⋯')
+        if lastchar == '─':
+            # hacky!
+            tokens.append('┄')
+        else:
+            tokens.append('⋯')
         return ''.join(tokens) + RESET
     return text
 
@@ -957,8 +961,8 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
 
             summary = ' ' + evt.summary
             if evt.start < weekstart:
-                summary = '⋯' + DASH * timecolsz + summary
-            if ndays > 1:
+                summary = '┄' + DASH * timecolsz + summary
+            if (evt.end - evt.start).days > 1:
                 outlen = ndays * (inner_width + 1) - 1
                 summary += ' ' + DASH * (outlen - len(evt.summary) - 3) + '>'
 
