@@ -882,6 +882,7 @@ def load_evts(*args, **kwargs):
 
 SOCK = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'unix_sock')
 import asyncio
+import dbus_next
 import signal
 import traceback
 from async_utils import read_pickled, write_pickled
@@ -890,13 +891,14 @@ def server():
         # not a race since we check again later
         raise Exception(SOCK + ' already exists')
     obj_lock = None
+    dl_queue = None
     objs = load_evts(print_warning=True)
     db = objs[0]['db']
 
-    async def download_loop():
+    async def do_download():
         nonlocal objs
         nonlocal obj_lock
-        while True:
+        while await dl_queue.get():
             try:
                 print(datetime.now(), 'downloading...')
                 new_obj = gcal.download_evts()
@@ -907,9 +909,16 @@ def server():
                     objs = (obj, evt2short)
                 print(datetime.now(), 'loaded ok')
             except Exception as e:
-                print('EXCEPTION: download loop:')
+                print('EXCEPTION: do_download:')
                 traceback.print_exc()
-            await asyncio.sleep(15*60)
+        print('INFO: do_download stopped')
+
+    async def download_loop():
+        nonlocal dl_queue
+        while True:
+            await dl_queue.put(True)
+            await asyncio.sleep(30*60)
+
     async def handle_connection(reader, writer):
         nonlocal objs
         nonlocal obj_lock
@@ -924,10 +933,16 @@ def server():
         await writer.drain()
         writer.close()
         await writer.wait_closed()
+
     async def start_server():
         nonlocal obj_lock
+        nonlocal dl_queue
+
         obj_lock = asyncio.Lock()
-        timer = asyncio.create_task(download_loop())
+        dl_queue = asyncio.Queue()
+        asyncio.create_task(do_download())
+        asyncio.create_task(download_loop())
+
         if os.path.exists(SOCK):
             # XXX could race
             raise Exception(SOCK + ' already exists')
@@ -935,18 +950,37 @@ def server():
         # XXX could race
         signal.signal(signal.SIGINT, cleanup)
         signal.signal(signal.SIGTERM, cleanup)
+
+        bus = await dbus_next.aio.MessageBus(bus_type=dbus_next.BusType.SYSTEM).connect()
+        introspection = await bus.introspect('org.freedesktop.login1', '/org/freedesktop/login1')
+        proxy = bus.get_proxy_object('org.freedesktop.login1', '/org/freedesktop/login1', introspection)
+        interface = proxy.get_interface('org.freedesktop.login1.Manager')
+        interface.on_prepare_for_sleep(standby_handler)
+
         try:
             async with server:
                 await server.serve_forever()
         finally:
             cleanup()
+
+    def standby_handler(into_standby):
+        # `into_standby` is True when going into standby
+        #               and False when coming out of standby
+        nonlocal dl_queue
+        if not into_standby:
+            # only fire when coming out of standby
+            asyncio.create_task(dl_queue.put(True))
+
     def cleanup(_signum=None, _frame=None):
         try:
             os.remove(SOCK)
         except:
             pass
         exit(1)
+
     asyncio.run(start_server())
+
+
 def client(argv, termsize):
     async def do_client():
         reader, writer = await asyncio.open_unix_connection(SOCK)
@@ -957,6 +991,7 @@ def client(argv, termsize):
         await writer.wait_closed()
         return table
     return asyncio.run(do_client())
+
 
 def parse_args(argv, termsize, objs=None):
     parser = argparse.ArgumentParser(exit_on_error=False)
