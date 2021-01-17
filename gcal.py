@@ -1,8 +1,45 @@
-from datetime import date, datetime, timedelta as t
+from collections import OrderedDict
+from datetime import date, datetime, time, timedelta as t
 from dateutil.parser import parse as dateparse
+from dateutil.tz import tzlocal
+from unittest.mock import patch as mock_patch, MagicMock
 import json
-import sys
+import pickle
 import re
+import sys
+import sqlite3
+import yaml
+
+
+def base_datetime(thedate, thetime=None):
+    if thetime is None:
+        thetime = time()
+    if (tzinfo := getattr(thedate, 'tzinfo', None)) is None:
+        tzinfo = tzlocal()
+    return datetime.combine(thedate, thetime, tzinfo)
+
+def as_date(date_or_datetime, endtime=False):
+    if isinstance(date_or_datetime, datetime):
+        return date_or_datetime.date()
+    return date_or_datetime - t(days=int(endtime))
+
+def as_datetime(date_or_datetime):
+    if isinstance(date_or_datetime, date) and not isinstance(date_or_datetime, datetime):
+        return base_datetime(date_or_datetime)
+    return date_or_datetime
+
+# this exists purely because pyyaml is stupid
+# and parses datetimes back as naive (utc-based) datetimes
+tzl = tzlocal()
+def localize(dt):
+    global tzl
+    if isinstance(dt, datetime):
+        if not dt.tzinfo:
+            return tzl.fromutc(dt)
+    elif isinstance(dt, date):
+        return dt
+    return dt
+
 
 
 def new_auth(filename, scope='https://www.googleapis.com/auth/calendar'):
@@ -137,6 +174,173 @@ class Event:
         # XXX recurrence?
         evt._e = e
         return evt
+
+def _ev_entry(ev):
+    return {
+        'id': ev.id,
+        'start': ev.start,
+        'end': ev.end,
+        'summary': ev.summary,
+        'location': ev.location,
+        'startdate': as_date(ev.start),
+        'enddate': as_date(ev.end, endtime=True),
+        'cancelled': ev.cancelled,
+        'calendar': ev.calendar,
+        'hastime': isinstance(ev.start, datetime),
+        'root_id': ev._e.get('recurringEventId', ev.id),
+        'local_recurring': None,
+        'blob': pickle.dumps(ev._e, protocol=-1),
+    }
+
+def get_visible_cals(cals):
+    try:
+        allCals = []
+        with open('calendars.yaml') as f:
+            data = yaml.full_load(f)
+            for entry in data:
+                allCals.append(next(iter(entry.items())))
+        allCals = OrderedDict(allCals)
+    except FileNotFoundError:
+        selectedCals = filter(lambda cal: 'selected' in cal and cal['selected'], cals)
+        selectedCals = sorted(selectedCals, key=lambda cal: '' if 'primary' in cal and cal['primary'] else cal['summary'])
+        allCals = OrderedDict()
+        data = []
+        for cal in selectedCals:
+            key = cal['summary'].split()[0].lower()
+            key = filter(str.isalpha, key)
+            key = ''.join(key)
+            allCals[key] = cal['id']
+            data.append({key: cal['id']})
+        with open('calendars.yaml', 'w') as f:
+            yaml.dump(data, f, default_flow_style=False)
+    allNames = list(allCals.keys())
+    allCals['all'] = allNames
+    return allCals
+
+def download_evts():
+    db = sqlite3.connect('evts.sqlite3')
+    with mock_patch('pickle.dumps'):
+        keys = list(_ev_entry(MagicMock()).keys())
+    db.execute(f'create table if not exists events (id PRIMARY KEY,{",".join(keys[1:])})')
+    now = datetime.now(tzlocal())
+    tries_remaining = 2
+    while tries_remaining:
+        try:
+            tries_remaining -= 1
+            cals = s().calendarList().list().execute()['items']
+            break
+        except ConnectionResetError:
+            if not tries_remaining:
+                raise
+            load_http_auth()
+    obj = {
+        'calendars': cals,
+        'timestamp': now,
+    }
+    calmap = {cal['id']: cal for cal in cals}
+    allCals = get_visible_cals(cals)
+    try:
+        old_obj = load_evts(print_warning=False, partial=True)
+        syncTokens = {cal['id']: cal.get('syncToken') for cal in old_obj['calendars']}
+    except FileNotFoundError:
+        syncTokens = {}
+    for calId in allCals.values():
+        if not isinstance(calId, str) or '@' not in calId:
+            continue
+        print(f'downloading {calId}...')
+        kwargs = {
+            'calendarId': calId,
+            'singleEvents': True,
+            'maxResults': 2500,
+            'syncToken': syncTokens.get(calId),
+        }
+        pagenum = 0
+        while True:
+            pagenum += 1
+            if pagenum > 1:
+                print(f'  downloading page {pagenum}...')
+            try:
+                r = s().events().list(**kwargs).execute()
+            except HttpError as e:
+                if int(e.resp['status']) == 410:
+                    print("  410'd, redownloading...")
+                    db.execute(f'''delete from events where calendar = ?''', (calId,))
+                    if calId in syncTokens:
+                        del syncTokens[calId]
+                    if 'syncToken' in kwargs:
+                        del kwargs['syncToken']
+                    if 'pageToken' in kwargs:
+                        del kwargs['pageToken']
+                    pagenum = 0
+                    continue
+                else:
+                    raise
+            except Exception as e:
+                print(repr(e))
+            entries = []
+            deleting = []
+            for e in r['items']:
+                if e['status'] == 'cancelled':
+                    deleting.append((e['id'],))
+                else:
+                    ev = Event.unpkg(e)
+                    ev.calendar = calId
+                    entries.append(_ev_entry(ev))
+            db.executemany(f'''insert into events values ({",".join(f":{key}" for key in keys)})
+                    on conflict(id) do update set {",".join(f"{key}=:{key}" for key in keys[1:])}''', entries)
+            db.executemany(f'''delete from events where id = ?''', deleting)
+            if 'nextPageToken' in r:
+                kwargs['pageToken'] = r['nextPageToken']
+                continue
+            if 'nextSyncToken' in r:
+                calmap[calId]['syncToken'] = r['nextSyncToken']
+            break
+        db.commit()
+    with open('evts.yaml', 'w') as f:
+        yaml.dump(obj, f, default_flow_style=False)
+    with open('evts.pickle', 'wb') as f:
+        pickle.dump(obj, f, protocol=-1)
+    print('recomputing database...')
+    update_local_recurring(db)
+    db.commit()
+    return obj
+
+def update_local_recurring(db):
+    db.execute('''
+with local_recur (id, count) as (
+        select a.id, count(*) from events a
+        left join events b on a.root_id = b.root_id
+            and date(b.startdate) >= date(a.startdate, "-14 days")
+            and date(b.startdate) <= date(a.startdate, "+14 days")
+        group by a.id
+) update events
+set local_recurring = local_recur.count > 1
+from local_recur
+where events.id = local_recur.id
+''')
+
+def load_evts(*, print_warning=False, partial=False):
+    now = datetime.now(tzlocal())
+    try:
+        try:
+            with open('evts.pickle', 'rb') as f:
+                obj = pickle.load(f)
+        except FileNotFoundError:
+            with open('evts.yaml') as f:
+                obj = yaml.full_load(f)
+            obj['timestamp'] = localize(obj['timestamp'])
+        if obj['timestamp'] > now:
+            print(obj['timestamp'])
+        elif obj['timestamp'] + t(minutes=15) < now:
+            if print_warning:
+                print('timestamp out of date', file=sys.stderr)
+    except FileNotFoundError:
+        raise
+
+    if not partial:
+        obj['db'] = sqlite3.connect('file:evts.sqlite3?mode=ro', uri=True)
+
+    return obj
 
 def singleDay(summary, d):
     evt = Event(summary)
