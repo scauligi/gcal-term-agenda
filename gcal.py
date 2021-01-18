@@ -1,3 +1,4 @@
+from time import sleep
 from collections import OrderedDict
 from datetime import date, datetime, time, timedelta as t
 from dateutil.parser import parse as dateparse
@@ -217,13 +218,13 @@ def get_visible_cals(cals):
     allCals['all'] = allNames
     return allCals
 
-def download_evts():
+def download_evts(in_loop=False):
     db = sqlite3.connect('evts.sqlite3')
     with mock_patch('pickle.dumps'):
         keys = list(_ev_entry(MagicMock()).keys())
     db.execute(f'create table if not exists events (id PRIMARY KEY,{",".join(keys[1:])})')
     now = datetime.now(tzlocal())
-    tries_remaining = 2
+    tries_remaining = 2 if not in_loop else 5
     while tries_remaining:
         try:
             tries_remaining -= 1
@@ -232,6 +233,8 @@ def download_evts():
         except ConnectionResetError:
             if not tries_remaining:
                 raise
+            if in_loop:
+                sleep(30)
             load_http_auth()
     obj = {
         'calendars': cals,

@@ -901,7 +901,7 @@ def server():
         while await dl_queue.get():
             try:
                 print(datetime.now(), 'downloading...')
-                new_obj = gcal.download_evts()
+                new_obj = gcal.download_evts(in_loop=True)
                 async with obj_lock:
                     obj = new_obj
                     obj['db'] = db
@@ -917,7 +917,7 @@ def server():
         nonlocal dl_queue
         while True:
             await dl_queue.put(True)
-            await asyncio.sleep(30*60)
+            await asyncio.sleep(15*60)
 
     async def handle_connection(reader, writer):
         nonlocal objs
