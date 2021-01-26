@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 
-import os
-import re
-import sys
-import yaml
-import pickle
 import argparse
 import calendar
-
-from collections import Counter, defaultdict as ddict, namedtuple
-from datetime import date, datetime, time, timedelta as t, timezone
-from dateutil.tz import tzlocal
+import os
+import pickle
+import re
+import sys
+from collections import Counter
+from collections import defaultdict as ddict
+from collections import namedtuple
+from datetime import date, datetime, time
+from datetime import timedelta as t
+from datetime import timezone
 from itertools import zip_longest
 
+import yaml
+from dateutil.tz import tzlocal
+
 import gcal
-from gcal import Event, base_datetime, as_date, as_datetime
-
 from colortrans import rgb2short, short2rgb
-
 from doublebuffer import tokenize
+from gcal import Event, as_date, as_datetime, base_datetime
 
 TerminalSize = namedtuple('TerminalSize', ['columns', 'lines'])
 
@@ -26,22 +28,33 @@ TerminalSize = namedtuple('TerminalSize', ['columns', 'lines'])
 # Monkey patch to force IPv4
 def ipv4_monkey_patch():
     import socket
+
     orig_gai = socket.getaddrinfo
+
     def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-        return orig_gai(host, port, family=socket.AF_INET, type=type, proto=proto, flags=flags)
+        return orig_gai(
+            host, port, family=socket.AF_INET, type=type, proto=proto, flags=flags
+        )
+
     socket.getaddrinfo = getaddrinfo
+
 
 # https://stackoverflow.com/a/56842689
 class reversor:
     def __init__(self, obj):
         self.obj = obj
+
     def __eq__(self, other):
         return other.obj == self.obj
+
     def __lt__(self, other):
         return other.obj < self.obj
 
+
 def fg(short):
     return f'\033[38;5;{short}m'
+
+
 LGRAY = fg(250)
 MGRAY = fg(237)
 DGRAY = fg(235)
@@ -49,13 +62,16 @@ NOWLINE_COLOR = fg(66)
 RESET = '\033[0m'
 WBOLD = '\033[0;1m'
 
+
 def blen(line):
     return len(re.sub('\033.*?m', '', line))
 
+
 def shorten(text, inner_width):
     if len(text) > inner_width:
-        text = text[:inner_width-1] + '⋯'
+        text = text[: inner_width - 1] + '⋯'
     return f'{text:<{inner_width}}'
+
 
 def bshorten(text, max_width):
     if max_width is None:
@@ -75,13 +91,17 @@ def bshorten(text, max_width):
         return ''.join(tokens) + RESET
     return text
 
+
 def _strippable(token):
     return (token.isspace() and not token == '\xa0') or token.startswith('\033')
+
+
 def brstrip(text):
     tokens = tokenize(text)
     while tokens and _strippable(tokens[-1]):
         tokens.pop()
     return ''.join(tokens) + RESET
+
 
 # overlay `text` onto `row` at index `offset`
 def place(text, offset, row):
@@ -124,13 +144,16 @@ def place(text, offset, row):
                 l -= 1
             else:
                 lastcode = tok
-        return ''.join(tokens) + RESET + text + lastcode + ''.join(reversed(aftertokens))
+        return (
+            ''.join(tokens) + RESET + text + lastcode + ''.join(reversed(aftertokens))
+        )
     else:
         tokens = tokenize(row)
         while l > offset:
             if not tokens.pop().startswith('\033'):
                 l -= 1
         return ''.join(tokens) + RESET + text
+
 
 def dtime(dt=None, shrink=False):
     if not dt:
@@ -142,6 +165,7 @@ def dtime(dt=None, shrink=False):
         s = s.rstrip()
         s = re.sub(r' +', r' ', s)
     return s
+
 
 def ftime(dt=None, now=False):
     if not dt:
@@ -157,6 +181,7 @@ def ftime(dt=None, now=False):
             elif dt.hour == 12:
                 s = ' noon '
     return s
+
 
 def tdtime(td):
     days = td.days
@@ -176,11 +201,13 @@ def tdtime(td):
         s += 's' if minutes != 1 else ''
     return s
 
+
 def filter_calendars(obj, calendars):
     callist = []
     allCals = gcal.get_visible_cals(obj['calendars'])
     if not calendars:
         calendars = 'all'
+
     def _getCal(calendar):
         if isinstance(calendar, list):
             list(map(_getCal, calendar))
@@ -191,40 +218,52 @@ def filter_calendars(obj, calendars):
             _getCal(lookup)
         else:
             callist.append(calendar)
+
     _getCal(calendars)
     return callist
+
 
 def string_outofdate(obj, now=None):
     if not now:
         now = datetime.now(tzlocal())
-    if obj['timestamp'] + t(minutes=24*60) < now:
-        return fg(3) + 'Warning: timestamp is out of date by ' + tdtime(now - obj['timestamp']) + RESET
+    if obj['timestamp'] + t(minutes=24 * 60) < now:
+        return (
+            fg(3)
+            + 'Warning: timestamp is out of date by '
+            + tdtime(now - obj['timestamp'])
+            + RESET
+        )
     return None
+
 
 def make_evt2short(obj):
     cal2short = {}
     cal2dark = {}
     for cal in obj['calendars']:
         code = cal['backgroundColor']
-        rgb = [int(code[x:x+2], 16) for x in (1, 3, 5)]
+        rgb = [int(code[x : x + 2], 16) for x in (1, 3, 5)]
         v = max(rgb)
         new_v = max(v - 70, 0)
         scaling = new_v / v
         dark_code = ''.join(f'{round(x*scaling):02x}' for x in rgb)
         cal2short[cal['id']] = rgb2short(code)[0]
         cal2dark[cal['id']] = rgb2short(dark_code)[0]
+
     def evt2short(evt, dark=False):
         if dark:
             return cal2dark[evt.calendar]
         return cal2short[evt.calendar]
+
     return evt2short
+
 
 def get_events(obj, todate, ndays, callist, local_recurring=False):
     events = []
     callist = list(set(callist))
 
     if ndays >= 0:
-        rows = obj['db'].execute(f"""
+        rows = obj['db'].execute(
+            f"""
               select id,blob,local_recurring,start from events
               where
                     date(enddate) >= date(?)
@@ -232,10 +271,12 @@ def get_events(obj, todate, ndays, callist, local_recurring=False):
                  and not cancelled
                  and calendar in ({','.join("?"*len(callist))})
                 order by startdate, hastime, datetime(start)
-        """, (todate, todate, ndays,
-              *callist))
+        """,
+            (todate, todate, ndays, *callist),
+        )
     else:
-        rows = obj['db'].execute(f"""
+        rows = obj['db'].execute(
+            f"""
               select root_id,blob,local_recurring,min(start) from events
               where
                     date(enddate) >= date(?)
@@ -243,8 +284,9 @@ def get_events(obj, todate, ndays, callist, local_recurring=False):
                  and calendar in ({','.join("?"*len(callist))})
                 group by root_id
                 order by startdate, hastime, datetime(start)
-        """, (todate,
-              *callist))
+        """,
+            (todate, *callist),
+        )
 
     for _, blob, recurs_locally, _ in rows:
         ev = Event.unpkg(pickle.loads(blob))
@@ -253,16 +295,19 @@ def get_events(obj, todate, ndays, callist, local_recurring=False):
         events.append(ev)
     return events
 
+
 class Agenda:
     def __init__(self, calendars, objs=None, dark_recurring=False, interval=None):
         self.now = datetime.now(tzlocal())
         self.obj, evt2short = objs
+
         def _evt2short(evt):
             if as_date(evt.start) > as_date(self.now):
                 dark = dark_recurring and evt.recurring
             else:
                 dark = as_datetime(evt.end) <= self.now
             return evt2short(evt, dark=dark)
+
         self.evt2short = _evt2short
         self.callist = filter_calendars(self.obj, calendars)
         self.interval = t(minutes=(interval or 15))
@@ -274,7 +319,14 @@ class Agenda:
             return self.quantize(thetime - t(minutes=1))
         minutes = self.interval.seconds // 60
         theminutes = (thetime.hour * 60 + thetime.minute) // minutes * minutes
-        return datetime(thetime.year, thetime.month, thetime.day, theminutes // 60, theminutes % 60, tzinfo=thetime.tzinfo)
+        return datetime(
+            thetime.year,
+            thetime.month,
+            thetime.day,
+            theminutes // 60,
+            theminutes % 60,
+            tzinfo=thetime.tzinfo,
+        )
 
     def agenda_table(self, todate, ndays=None, print_warning=True):
         self.todate = todate
@@ -300,7 +352,9 @@ class Agenda:
             if outofdate := string_outofdate(self.obj, self.now):
                 table[0][None].append(outofdate)
 
-        events = get_events(self.obj, todate, actual_ndays, self.callist, local_recurring=True)
+        events = get_events(
+            self.obj, todate, actual_ndays, self.callist, local_recurring=True
+        )
 
         for evt in events:
             # get column (1-indexed)
@@ -386,18 +440,24 @@ class Agenda:
                                     endtext += ' (-> {})'
                                 endtext = endtext.format(ftime(evt.end).strip())
                         if locations:
-                            remaining_ticks = (self.quantize(evt.end) - tock).seconds // self.interval.seconds
+                            remaining_ticks = (
+                                self.quantize(evt.end) - tock
+                            ).seconds // self.interval.seconds
                             locstrs_to_join = max(len(locstrs) - remaining_ticks, 0)
                             locstr = ' '.join(locstrs[:locstrs_to_join])
                             if locstr:
                                 endtext = ' ' + locstr + endtext
                             locstrs = locstrs[locstrs_to_join:]
 
-                    summary = fg(self.evt2short(evt)) + summary + endtext + RESET + '   '
+                    summary = (
+                        fg(self.evt2short(evt)) + summary + endtext + RESET + '   '
+                    )
 
                     # place into leftmost region that is large enough
                     prev_end = 0
-                    for i, (icol_index, initial, text) in enumerate(sorted(contents[tickt])):
+                    for i, (icol_index, initial, text) in enumerate(
+                        sorted(contents[tickt])
+                    ):
                         if icol_index != col_index:
                             continue
                         if initial - prev_end >= blen(summary):
@@ -429,7 +489,6 @@ class Agenda:
             contents[tickt].sort()
         return contents
 
-
     def dayview(self, table, forced=False):
         newtable = []
 
@@ -445,10 +504,14 @@ class Agenda:
 
         # if there are no actual events
         if not any(evtcol.items()):
-            newtable.append(f'{LGRAY}{dtime(self.todate)} {timefield}  no events{RESET}')
+            newtable.append(
+                f'{LGRAY}{dtime(self.todate)} {timefield}  no events{RESET}'
+            )
             # place the "now" arrow
             if is_todate:
-                newtable.append(f'{dtime()} {ftime()}    <-- ' + ftime(self.now, now=True))
+                newtable.append(
+                    f'{dtime()} {ftime()}    <-- ' + ftime(self.now, now=True)
+                )
 
             return newtable
 
@@ -482,7 +545,11 @@ class Agenda:
             tick = base_datetime(self.todate, tickt)
 
             # skip blank slots until the first event
-            if not did_first and not timecol[tickt] and not (is_todate and tick == nowtick):
+            if (
+                not did_first
+                and not timecol[tickt]
+                and not (is_todate and tick == nowtick)
+            ):
                 continue
             # skip blank slots after the last event
             if tickt > lasttick and not (is_todate and tick == nowtick):
@@ -513,7 +580,9 @@ class Agenda:
         # compile newtable
         newtable = [[dtime(), *line] for line in newtable]
         newtable[0][0] = dtime(self.todate)
-        newtable = [f'{LGRAY}{line[0]} {line[1]}  {line[2]}{RESET}' for line in newtable]
+        newtable = [
+            f'{LGRAY}{line[0]} {line[1]}  {line[2]}{RESET}' for line in newtable
+        ]
 
         # collect status messages
         if timecol[None]:
@@ -526,7 +595,7 @@ class Agenda:
         newline = '(\n(' + re.escape(RESET) + ')?)'
         lines = '\n'.join(brstrip(line) for line in table)
         lines = lines.replace('\0', ' ')
-        lines = re.sub(newline + r'{9,}', r'\n'*9 + RESET, lines)
+        lines = re.sub(newline + r'{9,}', r'\n' * 9 + RESET, lines)
         lines = re.sub(newline + r'*$', '', lines)
         print(lines)
 
@@ -546,22 +615,26 @@ def listcal(todate, calendars, no_recurring=False, forced=False, objs=None):
     nextsunday = 7 - weekday
     nextmonth = date(today.year + today.month // 12, today.month % 12 + 1, 1)
     nextmonth = base_datetime(nextmonth)
-    follmonth = date(today.year + (today.month + 1) // 12, (today.month + 1) % 12 + 1, 1)
+    follmonth = date(
+        today.year + (today.month + 1) // 12, (today.month + 1) % 12 + 1, 1
+    )
     follmonth = base_datetime(follmonth)
 
     highwater = [
-        (None,                              '== ONGOING =='),
-        (today,                             '== TODAY =='),
-        (today + t(days=1),                 '== TOMORROW =='),
-        (today + t(days=2),                 '== THIS WEEK =='),
-        (today + t(days=nextsunday),        '== NEXT WEEK =='),
-        (today + t(days=(nextsunday + 7)),  '== FOLLOWING WEEK =='),
+        (None, '== ONGOING =='),
+        (today, '== TODAY =='),
+        (today + t(days=1), '== TOMORROW =='),
+        (today + t(days=2), '== THIS WEEK =='),
+        (today + t(days=nextsunday), '== NEXT WEEK =='),
+        (today + t(days=(nextsunday + 7)), '== FOLLOWING WEEK =='),
         (today + t(days=(nextsunday + 14)), '== THIS MONTH =='),
-        (nextmonth,                         '== NEXT MONTH =='),
-        (follmonth,                         '== THE FUTURE =='),
+        (nextmonth, '== NEXT MONTH =='),
+        (follmonth, '== THE FUTURE =='),
     ]
 
-    events = get_events(obj, todate, 1 if forced else -1, callist, local_recurring=forced)
+    events = get_events(
+        obj, todate, 1 if forced else -1, callist, local_recurring=forced
+    )
 
     seen = Counter()
     for evt in events:
@@ -592,6 +665,7 @@ def listcal(todate, calendars, no_recurring=False, forced=False, objs=None):
     return table
 
 
+# fmt: off
 CORNERS = """\
 ┌┬┐▄
 ├┼┤█
@@ -599,8 +673,18 @@ CORNERS = """\
 DASH = "─"
 PIPE = "│"
 THICK = "█"
+# fmt: on
 
-def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False, table_height=4, no_recurring=False):
+
+def fourweek(
+    todate,
+    calendars,
+    termsize=None,
+    objs=None,
+    zero_offset=False,
+    table_height=4,
+    no_recurring=False,
+):
     table_width = 7
 
     inner_width = (termsize.columns - (table_width + 1)) // table_width
@@ -627,7 +711,7 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False, tab
             line += fill * inner_width + mid
         if rev_offset:
             index = rev_offset * (inner_width + 1)
-            line = line[:index] + thick + line[index+1:]
+            line = line[:index] + thick + line[index + 1 :]
         line = line[:-1] + right
         return LGRAY + line + RESET
 
@@ -643,12 +727,14 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False, tab
     obj, _evt2short = objs
     now = datetime.now(tzlocal())
     nowdate = now.date()
+
     def evt2short(evt):
         if as_date(evt.start) > as_date(now):
             dark = evt.recurring
         else:
             dark = as_datetime(evt.end) <= now
         return _evt2short(evt, dark=dark)
+
     def choice(evt):
         if as_date(evt.start) == nowdate:
             return isinstance(evt.end, datetime) and evt.start >= now
@@ -660,7 +746,13 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False, tab
     cells = [(list(), list()) for _ in range(table_width * table_height)]
 
     calstart = todate - t(days=offset)
-    events = get_events(obj, todate - t(days=offset), table_width * table_height, callist, local_recurring=True)
+    events = get_events(
+        obj,
+        todate - t(days=offset),
+        table_width * table_height,
+        callist,
+        local_recurring=True,
+    )
 
     for evt in events:
         if no_recurring and evt.recurring:
@@ -702,13 +794,19 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False, tab
                     if celldate == now.date():
                         datetext = f'> {datetext} <'
                         dcolor = WBOLD
-                    text = dcolor + shorten(f'{datetext:^{inner_width}}', inner_width) + RESET
+                    text = (
+                        dcolor
+                        + shorten(f'{datetext:^{inner_width}}', inner_width)
+                        + RESET
+                    )
                 elif l == 1:
                     text = LGRAY + DASH * inner_width + RESET
                 else:
                     l -= 2
                     if l + 2 == inner_height - 1 and len(cell) > l + 1:
-                        text = shorten(format('... more ...', f'^{inner_width}'), inner_width)
+                        text = shorten(
+                            format('... more ...', f'^{inner_width}'), inner_width
+                        )
                         text = fg(4) + text + RESET
                     elif l < len(cell):
                         text = cell[l]
@@ -732,7 +830,17 @@ def fourweek(todate, calendars, termsize=None, objs=None, zero_offset=False, tab
         newtable[0] = place(outofdate, 2, newtable[0])
     return newtable
 
-def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recurring=False, zero_offset=False, interval=None):
+
+def weekview(
+    todate,
+    week_ndays,
+    calendars,
+    termsize=None,
+    objs=None,
+    dark_recurring=False,
+    zero_offset=False,
+    interval=None,
+):
     table_width = week_ndays if week_ndays > 0 else 7
     interval = interval or 30
 
@@ -744,7 +852,9 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
         week_ndays = 7
     weekstart = todate - t(days=offset)
 
-    agendamaker = Agenda(calendars, objs=objs, dark_recurring=dark_recurring, interval=interval)
+    agendamaker = Agenda(
+        calendars, objs=objs, dark_recurring=dark_recurring, interval=interval
+    )
     timecol, *evtcols = agendamaker.agenda_table(weekstart, ndays=table_width)
 
     todate_offset = (agendamaker.now.date() - weekstart).days
@@ -762,7 +872,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
     for i, evtcol in enumerate(evtcols):
         for evt in evtcol.pop(None, []):
             ndays = (evt.end - weekstart).days - i
-            subcols = daycols[i:i+ndays]
+            subcols = daycols[i : i + ndays]
             topslot = max(map(len, subcols))
             for j in range(topslot):
                 if all(j >= len(daycol) or daycol[j] is OPEN for daycol in subcols):
@@ -832,7 +942,9 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
                 if not i:
                     continue
                 filltime = ' ' + ftime(tickt).strip() + ' '
-                row = place(MGRAY + filltime + RESET, calc_initial(i, -(len(filltime) + 1)), row)
+                row = place(
+                    MGRAY + filltime + RESET, calc_initial(i, -(len(filltime) + 1)), row
+                )
 
         if callable(iterable_or_fn):
             iterable = map(iterable_or_fn, range(table_width))
@@ -863,6 +975,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
             dcolor = WBOLD
         datestr = '{:^{}}'.format(datestr, inner_width)
         return dcolor + datestr + RESET
+
     newtable.append(assemble_row(None, date_header))
 
     # assemble full-day events
@@ -870,7 +983,6 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
     newtable.append(do_row(None, DASH, *CORNERS[1]))
     for j in range(maxslots):
         newtable.append(assemble_row(None, lambda i: daycols[i][j]))
-
 
     # assemble timeblocks
     newtable.append(do_row(DASH, DASH, CORNERS[1][1], *CORNERS[1][1:]))
@@ -880,13 +992,20 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
             nowtime = ftime(agendamaker.now, now=True).strip()
             nowtime_centered = f'{nowtime:^{inner_width}}'
             nowdex = max(len(nowtime_centered) - len(nowtime_centered.lstrip()) - 1, 0)
-            pipeline = LGRAY + PIPE + NOWLINE_COLOR + DASH * (inner_width + 1) * table_width
+            pipeline = (
+                LGRAY + PIPE + NOWLINE_COLOR + DASH * (inner_width + 1) * table_width
+            )
             pipeline = pipeline[:-1] + LGRAY + PIPE
-            pipeline = place(NOWLINE_COLOR + f' {nowtime} ', (inner_width + 1) * todate_offset + nowdex + 1, pipeline)
+            pipeline = place(
+                NOWLINE_COLOR + f' {nowtime} ',
+                (inner_width + 1) * todate_offset + nowdex + 1,
+                pipeline,
+            )
             row = pipeline + RESET
         newtable.append(assemble_row(timecol[tickt], contents[tickt], row))
 
     return newtable
+
 
 def load_evts(*args, **kwargs):
     obj = gcal.load_evts(*args, **kwargs)
@@ -895,11 +1014,15 @@ def load_evts(*args, **kwargs):
     evt2short = make_evt2short(obj)
     return obj, evt2short
 
+
 SOCK = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'unix_sock')
 import asyncio
 import signal
 import traceback
+
 from async_utils import read_pickled, write_pickled
+
+
 def server():
     if os.path.exists(SOCK):
         # not a race since we check again later
@@ -931,7 +1054,7 @@ def server():
         nonlocal dl_queue
         while True:
             await dl_queue.put(True)
-            await asyncio.sleep(15*60)
+            await asyncio.sleep(15 * 60)
 
     async def handle_connection(reader, writer):
         nonlocal objs
@@ -990,19 +1113,63 @@ def client(argv, termsize):
         writer.close()
         await writer.wait_closed()
         return table
+
     return asyncio.run(do_client())
 
 
 def parse_args(argv, termsize, objs=None):
     parser = argparse.ArgumentParser(exit_on_error=False)
-    parser.add_argument('-c', '--calendar', metavar='CALENDAR', action='append', help='restrict to specified calendar(s)')
-    parser.add_argument('-i', '--interval', metavar='MINUTES', action='store', type=int, help='interval for default/week view')
-    parser.add_argument('-l', '--list-calendar', action='store_true', help='print a list of events')
-    parser.add_argument('-R', '--no-recurring', action='store_true', help='do not print recurring events in list')
-    parser.add_argument('-x', '--four-week', metavar='N', nargs='?', const=4, type=int, help='print an N-week diagram (default 4)')
-    parser.add_argument('-m', '--month-view', action='store_true', help='print a month diagram')
-    parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
-    parser.add_argument('-w', '--week-view', metavar='N', nargs='?', const=0, type=int, help='print a multi-day view (of N days)')
+    parser.add_argument(
+        '-c',
+        '--calendar',
+        metavar='CALENDAR',
+        action='append',
+        help='restrict to specified calendar(s)',
+    )
+    parser.add_argument(
+        '-i',
+        '--interval',
+        metavar='MINUTES',
+        action='store',
+        type=int,
+        help='interval for default/week view',
+    )
+    parser.add_argument(
+        '-l', '--list-calendar', action='store_true', help='print a list of events'
+    )
+    parser.add_argument(
+        '-R',
+        '--no-recurring',
+        action='store_true',
+        help='do not print recurring events in list',
+    )
+    parser.add_argument(
+        '-x',
+        '--four-week',
+        metavar='N',
+        nargs='?',
+        const=4,
+        type=int,
+        help='print an N-week diagram (default 4)',
+    )
+    parser.add_argument(
+        '-m', '--month-view', action='store_true', help='print a month diagram'
+    )
+    parser.add_argument(
+        '-0',
+        '--zero-offset',
+        action='store_true',
+        help='start the four-week diagram on the current day instead of Sunday',
+    )
+    parser.add_argument(
+        '-w',
+        '--week-view',
+        metavar='N',
+        nargs='?',
+        const=0,
+        type=int,
+        help='print a multi-day view (of N days)',
+    )
     parser.add_argument('date', nargs='*', help='use this date instead of today')
     args, remain = parser.parse_known_args(argv)
     if remain:
@@ -1018,6 +1185,7 @@ def parse_args(argv, termsize, objs=None):
 
     if args.date:
         import parsedatetime
+
         pdt = parsedatetime.Calendar()
         aday = datetime(*pdt.parse(' '.join(args.date))[0][:6]).date()
         forced = True
@@ -1029,34 +1197,49 @@ def parse_args(argv, termsize, objs=None):
         objs = load_evts()
 
     if args.list_calendar:
-        table = listcal(aday, args.calendar,
-                        no_recurring=args.no_recurring,
-                        forced=forced,
-                        objs=objs)
+        table = listcal(
+            aday,
+            args.calendar,
+            no_recurring=args.no_recurring,
+            forced=forced,
+            objs=objs,
+        )
     elif args.four_week is not None:
-        table = fourweek(aday, args.calendar,
-                         termsize=termsize,
-                         zero_offset=args.zero_offset,
-                         table_height=args.four_week,
-                         no_recurring=args.no_recurring,
-                         objs=objs)
+        table = fourweek(
+            aday,
+            args.calendar,
+            termsize=termsize,
+            zero_offset=args.zero_offset,
+            table_height=args.four_week,
+            no_recurring=args.no_recurring,
+            objs=objs,
+        )
     elif args.month_view:
         aday = date(aday.year, aday.month, 1)
         firstweekday = aday.weekday() if args.zero_offset else calendar.SUNDAY
-        nweeks = len(calendar.Calendar(firstweekday).monthdayscalendar(aday.year, aday.month))
-        table = fourweek(aday, args.calendar,
-                         termsize=termsize,
-                         zero_offset=args.zero_offset,
-                         table_height=nweeks,
-                         no_recurring=args.no_recurring,
-                         objs=objs)
+        nweeks = len(
+            calendar.Calendar(firstweekday).monthdayscalendar(aday.year, aday.month)
+        )
+        table = fourweek(
+            aday,
+            args.calendar,
+            termsize=termsize,
+            zero_offset=args.zero_offset,
+            table_height=nweeks,
+            no_recurring=args.no_recurring,
+            objs=objs,
+        )
     elif args.week_view is not None:
-        table = weekview(aday, args.week_view, args.calendar,
-                         termsize=termsize,
-                         dark_recurring=args.no_recurring,
-                         zero_offset=args.zero_offset,
-                         interval=args.interval,
-                         objs=objs)
+        table = weekview(
+            aday,
+            args.week_view,
+            args.calendar,
+            termsize=termsize,
+            dark_recurring=args.no_recurring,
+            zero_offset=args.zero_offset,
+            interval=args.interval,
+            objs=objs,
+        )
     else:
         agendamaker = Agenda(args.calendar, objs=objs, interval=args.interval)
         cols = agendamaker.agenda_table(aday)
@@ -1067,15 +1250,27 @@ def parse_args(argv, termsize, objs=None):
             table += agendamaker.dayview(cols)
     return table
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-4', '--force-ipv4', action='store_true', help="force IPv4 sockets")
+    parser.add_argument(
+        '-4', '--force-ipv4', action='store_true', help="force IPv4 sockets"
+    )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument('-d', '--download-only', action='store_true', help="don't print anything, just refresh the calendar cache")
+    group.add_argument(
+        '-d',
+        '--download-only',
+        action='store_true',
+        help="don't print anything, just refresh the calendar cache",
+    )
     group.add_argument('--server', action='store_true', help="start server")
     group.add_argument('--client', action='store_true', help="run as client")
-    parser.add_argument('-W', '--width', action='store', type=int, help='set terminal width')
-    parser.add_argument('-H', '--height', action='store', type=int, help='set terminal height')
+    parser.add_argument(
+        '-W', '--width', action='store', type=int, help='set terminal width'
+    )
+    parser.add_argument(
+        '-H', '--height', action='store', type=int, help='set terminal height'
+    )
     args, remainder = parser.parse_known_args()
 
     termsize = TerminalSize(args.width, args.height)
@@ -1085,7 +1280,7 @@ def main():
             if termsize.columns is None:
                 termsize = termsize._replace(columns=term_dimensions.columns)
             if termsize.lines is None:
-                termsize = termsize._replace(lines=term_dimensions.lines-1)
+                termsize = termsize._replace(lines=term_dimensions.lines - 1)
         except OSError:
             pass
 
@@ -1103,6 +1298,7 @@ def main():
         return client(remainder, termsize)
     else:
         return parse_args(remainder, termsize)
+
 
 if __name__ == '__main__':
     table = main()
