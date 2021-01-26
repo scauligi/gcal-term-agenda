@@ -1,14 +1,15 @@
-from time import sleep
 from collections import OrderedDict
 from datetime import date, datetime, time, timedelta as t
 from dateutil.parser import parse as dateparse
 from dateutil.tz import tzlocal
+from time import sleep
 from unittest.mock import patch as mock_patch, MagicMock
 import json
 import pickle
 import re
-import sys
+import socket
 import sqlite3
+import sys
 import yaml
 
 
@@ -230,12 +231,13 @@ def download_evts(in_loop=False):
             tries_remaining -= 1
             cals = s().calendarList().list().execute()['items']
             break
-        except ConnectionResetError:
+        except Exception as e:
+            print(e)
             if not tries_remaining:
                 raise
             if in_loop:
+                print('retrying in 30 seconds...')
                 sleep(30)
-            load_http_auth()
     obj = {
         'calendars': cals,
         'timestamp': now,

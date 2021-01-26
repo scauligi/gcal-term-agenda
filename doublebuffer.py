@@ -79,16 +79,19 @@ async def run_cmd():
     global run_cmd_queue
     global repaint_queue
 
+    def templatize(termsize, s):
+        s = s.replace('%W', str(termsize.columns))
+        s = s.replace('%H', str(termsize.lines))
+        s = re.sub(r'%{H\+(\d+)}', lambda m: str(termsize.lines + int(m[1])), s)
+        return s
+
     while await run_cmd_queue.get():
         termsize = os.get_terminal_size()
-        cmd = template_cmd
-        cmd = cmd.replace('%W', str(termsize.columns))
-        cmd = cmd.replace('%H', str(termsize.lines))
-        cmd = re.sub(r'%{H\+(\d+)}', lambda m: str(termsize.lines + int(m[1])), cmd)
+        cmd = tuple(templatize(termsize, arg) for arg in template_cmd)
 
-        capture = await asyncio.create_subprocess_shell(cmd,
-                                                        stdout=asyncio.subprocess.PIPE,
-                                                        stderr=asyncio.subprocess.PIPE)
+        capture = await asyncio.create_subprocess_exec(*cmd,
+                                                       stdout=asyncio.subprocess.PIPE,
+                                                       stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await capture.communicate()
         lines = stdout.decode().replace('\r\n', '\n').split('\n')
         lines += stderr.decode().replace('\r\n', '\n').split('\n')
@@ -203,11 +206,11 @@ async def async_do(args):
 def do(args):
     global template_cmd
 
-    cmd = ' '.join(args.command)
+    cmd = tuple(args.command)
     if args.interactive_shell:
-        cmd = f'bash -ic "{quote(cmd)}"'
+        cmd = ('bash', '-ic', ' '.join(cmd))
     if args.pseudo_terminal:
-        cmd = f'script -qec "{quote(cmd)}" /dev/null'
+        cmd = ('script', '-qec', ' '.join(cmd), '/dev/null')
     template_cmd = cmd
 
     asyncio.run(async_do(args))

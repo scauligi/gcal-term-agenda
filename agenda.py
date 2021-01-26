@@ -76,7 +76,7 @@ def bshorten(text, max_width):
     return text
 
 def _strippable(token):
-    return token.isspace() or token.startswith('\033')
+    return (token.isspace() and not token == '\xa0') or token.startswith('\033')
 def brstrip(text):
     tokens = tokenize(text)
     while tokens and _strippable(tokens[-1]):
@@ -85,6 +85,18 @@ def brstrip(text):
 
 # overlay `text` onto `row` at index `offset`
 def place(text, offset, row):
+    if '\0' in text:
+        texts = text.split('\0')
+        lastcode = ''
+        for text in texts:
+            text = lastcode + text
+            row = place(lastcode + text, offset, row)
+            for tok in reversed(tokenize(text)):
+                if tok.startswith('\033'):
+                    lastcode = tok
+                    break
+            offset += blen(text) + 1
+        return row
     l = blen(row)
     if l <= offset:
         row += ' ' * (offset - l)
@@ -185,7 +197,7 @@ def filter_calendars(obj, calendars):
 def string_outofdate(obj, now=None):
     if not now:
         now = datetime.now(tzlocal())
-    if obj['timestamp'] + t(minutes=16) < now:
+    if obj['timestamp'] + t(minutes=24*60) < now:
         return fg(3) + 'Warning: timestamp is out of date by ' + tdtime(now - obj['timestamp']) + RESET
     return None
 
@@ -400,11 +412,13 @@ class Agenda:
                         for endtick in self._until(tock, evt.end):
                             endtock = endtick + self.interval
                             if evt.end == endtock:
-                                text = '_|_ '
+                                # \xa0 is non-breaking space
+                                # which is handled specially in brstrip()
+                                text = '\033[4m\xa0│\xa0\033[24m\0'
                             elif evt.end < endtock:
-                                text = '-+- ({}) '.format(ftime(evt.end).strip())
+                                text = '┴┴┴ ({}) '.format(ftime(evt.end).strip())
                             else:
-                                text = ' |  '
+                                text = '\0│\0\0'
                             if locations:
                                 if locstrs:
                                     text += locstrs.pop(0) + '  '
@@ -511,6 +525,7 @@ class Agenda:
     def print_table(table):
         newline = '(\n(' + re.escape(RESET) + ')?)'
         lines = '\n'.join(brstrip(line) for line in table)
+        lines = lines.replace('\0', ' ')
         lines = re.sub(newline + r'{9,}', r'\n'*9 + RESET, lines)
         lines = re.sub(newline + r'*$', '', lines)
         print(lines)
@@ -732,7 +747,8 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
     agendamaker = Agenda(calendars, objs=objs, dark_recurring=dark_recurring, interval=interval)
     timecol, *evtcols = agendamaker.agenda_table(weekstart, ndays=table_width)
 
-    has_todate = 0 <= (agendamaker.now.date() - weekstart).days < week_ndays
+    todate_offset = (agendamaker.now.date() - weekstart).days
+    has_todate = 0 <= todate_offset < week_ndays
     nowtick = agendamaker.quantize(agendamaker.now).time()
 
     timecolsz = len(ftime()) + 1
@@ -851,8 +867,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
 
     # assemble full-day events
     maxslots = max(map(len, daycols))
-    if maxslots:
-        newtable.append(do_row(None, DASH, *CORNERS[1]))
+    newtable.append(do_row(None, DASH, *CORNERS[1]))
     for j in range(maxslots):
         newtable.append(assemble_row(None, lambda i: daycols[i][j]))
 
@@ -867,7 +882,7 @@ def weekview(todate, week_ndays, calendars, termsize=None, objs=None, dark_recur
             nowdex = max(len(nowtime_centered) - len(nowtime_centered.lstrip()) - 1, 0)
             pipeline = LGRAY + PIPE + NOWLINE_COLOR + DASH * (inner_width + 1) * table_width
             pipeline = pipeline[:-1] + LGRAY + PIPE
-            pipeline = place(NOWLINE_COLOR + f' {nowtime} ', (inner_width + 1) * offset + nowdex + 1, pipeline)
+            pipeline = place(NOWLINE_COLOR + f' {nowtime} ', (inner_width + 1) * todate_offset + nowdex + 1, pipeline)
             row = pipeline + RESET
         newtable.append(assemble_row(timecol[tickt], contents[tickt], row))
 
@@ -882,7 +897,7 @@ def load_evts(*args, **kwargs):
 
 SOCK = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'unix_sock')
 import asyncio
-import dbus_next
+# import dbus_next
 import signal
 import traceback
 from async_utils import read_pickled, write_pickled
@@ -951,11 +966,11 @@ def server():
         signal.signal(signal.SIGINT, cleanup)
         signal.signal(signal.SIGTERM, cleanup)
 
-        bus = await dbus_next.aio.MessageBus(bus_type=dbus_next.BusType.SYSTEM).connect()
-        introspection = await bus.introspect('org.freedesktop.login1', '/org/freedesktop/login1')
-        proxy = bus.get_proxy_object('org.freedesktop.login1', '/org/freedesktop/login1', introspection)
-        interface = proxy.get_interface('org.freedesktop.login1.Manager')
-        interface.on_prepare_for_sleep(standby_handler)
+        # bus = await dbus_next.aio.MessageBus(bus_type=dbus_next.BusType.SYSTEM).connect()
+        # introspection = await bus.introspect('org.freedesktop.login1', '/org/freedesktop/login1')
+        # proxy = bus.get_proxy_object('org.freedesktop.login1', '/org/freedesktop/login1', introspection)
+        # interface = proxy.get_interface('org.freedesktop.login1.Manager')
+        # interface.on_prepare_for_sleep(standby_handler)
 
         try:
             async with server:
@@ -963,13 +978,13 @@ def server():
         finally:
             cleanup()
 
-    def standby_handler(into_standby):
-        # `into_standby` is True when going into standby
-        #               and False when coming out of standby
-        nonlocal dl_queue
-        if not into_standby:
-            # only fire when coming out of standby
-            asyncio.create_task(dl_queue.put(True))
+    # def standby_handler(into_standby):
+    #     # `into_standby` is True when going into standby
+    #     #               and False when coming out of standby
+    #     nonlocal dl_queue
+    #     if not into_standby:
+    #         # only fire when coming out of standby
+    #         asyncio.create_task(dl_queue.put(True))
 
     def cleanup(_signum=None, _frame=None):
         try:
@@ -999,7 +1014,7 @@ def parse_args(argv, termsize, objs=None):
     parser.add_argument('-i', '--interval', metavar='MINUTES', action='store', type=int, help='interval for default/week view')
     parser.add_argument('-l', '--list-calendar', action='store_true', help='print a list of events')
     parser.add_argument('-R', '--no-recurring', action='store_true', help='do not print recurring events in list')
-    parser.add_argument('-x', '--four-week', action='store_true', help='print a four-week diagram')
+    parser.add_argument('-x', '--four-week', metavar='N', nargs='?', const=4, type=int, help='print an N-week diagram (default 4)')
     parser.add_argument('-m', '--month-view', action='store_true', help='print a month diagram')
     parser.add_argument('-0', '--zero-offset', action='store_true', help='start the four-week diagram on the current day instead of Sunday')
     parser.add_argument('-w', '--week-view', metavar='N', nargs='?', const=0, type=int, help='print a multi-day view (of N days)')
@@ -1010,7 +1025,7 @@ def parse_args(argv, termsize, objs=None):
 
     modes = 0
     modes += args.list_calendar
-    modes += args.four_week
+    modes += args.four_week is not None
     modes += args.month_view
     modes += args.week_view is not None
     if modes > 1:
@@ -1033,10 +1048,11 @@ def parse_args(argv, termsize, objs=None):
                         no_recurring=args.no_recurring,
                         forced=forced,
                         objs=objs)
-    elif args.four_week:
+    elif args.four_week is not None:
         table = fourweek(aday, args.calendar,
                          termsize=termsize,
                          zero_offset=args.zero_offset,
+                         table_height=args.four_week,
                          no_recurring=args.no_recurring,
                          objs=objs)
     elif args.month_view:
