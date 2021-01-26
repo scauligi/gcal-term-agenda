@@ -897,7 +897,6 @@ def load_evts(*args, **kwargs):
 
 SOCK = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'unix_sock')
 import asyncio
-# import dbus_next
 import signal
 import traceback
 from async_utils import read_pickled, write_pickled
@@ -966,25 +965,11 @@ def server():
         signal.signal(signal.SIGINT, cleanup)
         signal.signal(signal.SIGTERM, cleanup)
 
-        # bus = await dbus_next.aio.MessageBus(bus_type=dbus_next.BusType.SYSTEM).connect()
-        # introspection = await bus.introspect('org.freedesktop.login1', '/org/freedesktop/login1')
-        # proxy = bus.get_proxy_object('org.freedesktop.login1', '/org/freedesktop/login1', introspection)
-        # interface = proxy.get_interface('org.freedesktop.login1.Manager')
-        # interface.on_prepare_for_sleep(standby_handler)
-
         try:
             async with server:
                 await server.serve_forever()
         finally:
             cleanup()
-
-    # def standby_handler(into_standby):
-    #     # `into_standby` is True when going into standby
-    #     #               and False when coming out of standby
-    #     nonlocal dl_queue
-    #     if not into_standby:
-    #         # only fire when coming out of standby
-    #         asyncio.create_task(dl_queue.put(True))
 
     def cleanup(_signum=None, _frame=None):
         try:
