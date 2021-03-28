@@ -190,7 +190,7 @@ def _ev_entry(ev):
         'calendar': ev.calendar,
         'hastime': isinstance(ev.start, datetime),
         'root_id': ev._e.get('recurringEventId', ev.id),
-        'local_recurring': None,
+        'startdate_index': as_date(ev.start).toordinal(),
         'blob': pickle.dumps(ev._e, protocol=-1),
     }
 
@@ -224,6 +224,15 @@ def download_evts(in_loop=False):
     with mock_patch('pickle.dumps'):
         keys = list(_ev_entry(MagicMock()).keys())
     db.execute(f'create table if not exists events (id PRIMARY KEY,{",".join(keys[1:])})')
+    db.execute(f'create index if not exists id_date on events (root_id, startdate_index)')
+    db.execute(f'''create view if not exists events_recurring as
+               select a.*, count(*) - 1 as local_recurring
+               from events a
+               left join events b on a.root_id = b.root_id
+                   and b.startdate_index >= a.startdate_index-14
+                   and b.startdate_index <= a.startdate_index+14
+               group by a.id
+               ''')
     now = datetime.now(tzlocal())
     tries_remaining = 2 if not in_loop else 5
     while tries_remaining:
@@ -305,24 +314,8 @@ def download_evts(in_loop=False):
         yaml.dump(obj, f, default_flow_style=False)
     with open('evts.pickle', 'wb') as f:
         pickle.dump(obj, f, protocol=-1)
-    print('recomputing database...')
-    update_local_recurring(db)
     db.commit()
     return obj
-
-def update_local_recurring(db):
-    db.execute('''
-with local_recur (id, count) as (
-        select a.id, count(*) from events a
-        left join events b on a.root_id = b.root_id
-            and date(b.startdate) >= date(a.startdate, "-14 days")
-            and date(b.startdate) <= date(a.startdate, "+14 days")
-        group by a.id
-) update events
-set local_recurring = local_recur.count > 1
-from local_recur
-where events.id = local_recur.id
-''')
 
 def load_evts(*, print_warning=False, partial=False):
     now = datetime.now(tzlocal())

@@ -93,7 +93,22 @@ async def run_cmd():
                                                        stdout=asyncio.subprocess.PIPE,
                                                        stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await capture.communicate()
-        lines = stdout.decode().replace('\r\n', '\n').split('\n')
+        try:
+            lines = stdout.decode(errors='ignore').replace('\r\n', '\n').split('\n')
+        except UnicodeDecodeError as e:
+            print(SWITCH_TO_NORM, end='', flush=True)
+            print(SHOW_CURSOR, end='', flush=True)
+            import sys
+            sys.stdout.buffer.write(stdout)
+            sys.stdout.buffer.flush()
+            print("\n\nstdout:")
+            print(stdout)
+            print("\n\nerror:")
+            print(e.object[max(0,e.start-20):e.end+20])
+            print(e.object[max(0,e.start-4):e.end+4])
+            print(e.object[max(0,e.start-1):e.end+1])
+            while await run_cmd_queue.get():
+                pass
         lines += stderr.decode().replace('\r\n', '\n').split('\n')
         while lines and (not lines[-1] or lines[-1].isspace()):
             lines.pop()
