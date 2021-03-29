@@ -264,7 +264,7 @@ def get_events(obj, todate, ndays, callist, local_recurring=False):
     if ndays >= 0:
         rows = obj['db'].execute(
             f"""
-              select id,blob,local_recurring,start from e2
+              select id,blob,local_recurring,start from events_recurring
               where
                     date(enddate) >= date(?)
                     and date(startdate) < date(?, "+" || ? || " days")
@@ -277,7 +277,7 @@ def get_events(obj, todate, ndays, callist, local_recurring=False):
     else:
         rows = obj['db'].execute(
             f"""
-              select root_id,blob,local_recurring,min(start) from e2
+              select root_id,blob,local_recurring,min(start) from events_recurring
               where
                     date(enddate) >= date(?)
                  and not cancelled
@@ -291,7 +291,7 @@ def get_events(obj, todate, ndays, callist, local_recurring=False):
     for _, blob, recurs_locally, _ in rows:
         ev = Event.unpkg(pickle.loads(blob))
         if local_recurring:
-            ev.recurring = bool(recurs_locally - 1)
+            ev.recurring = bool(recurs_locally)
         events.append(ev)
     return events
 
