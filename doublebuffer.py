@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
+import asyncio
+import datetime
 import os
 import re
-import subprocess
-import datetime
 import signal
-
-import asyncio
+import subprocess
 
 HIDE_CURSOR = '\033[?25l'
 SWITCH_TO_ALT = '\033[?1049h'
@@ -15,6 +14,7 @@ CLEAR_TERM = '\033[H'
 SWITCH_TO_NORM = '\033[?1049l'
 SHOW_CURSOR = '\033[?25h'
 RESET = '\033[0m'
+
 
 def tokenize(line):
     chars = list(line)
@@ -30,6 +30,7 @@ def tokenize(line):
         else:
             tokens.append(c)
     return tokens
+
 
 def linesplit(oldtokenlines, columns, chop=False):
     counter = 0
@@ -57,10 +58,12 @@ def linesplit(oldtokenlines, columns, chop=False):
     tokenlines = [''.join(tokens) for tokens in tokenlines]
     return tokenlines
 
+
 def quote(s):
     s = s.replace('\\', '\\\\')
     s = s.replace('"', '\\"')
     return s
+
 
 debug = False
 template_cmd = None
@@ -70,6 +73,7 @@ run_cmd_queue = None
 
 lines_lock = None
 out_lines = []
+
 
 async def run_cmd():
     global debug
@@ -89,9 +93,9 @@ async def run_cmd():
         termsize = os.get_terminal_size()
         cmd = tuple(templatize(termsize, arg) for arg in template_cmd)
 
-        capture = await asyncio.create_subprocess_exec(*cmd,
-                                                       stdout=asyncio.subprocess.PIPE,
-                                                       stderr=asyncio.subprocess.PIPE)
+        capture = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
         stdout, stderr = await capture.communicate()
         try:
             lines = stdout.decode(errors='ignore').replace('\r\n', '\n').split('\n')
@@ -99,14 +103,15 @@ async def run_cmd():
             print(SWITCH_TO_NORM, end='', flush=True)
             print(SHOW_CURSOR, end='', flush=True)
             import sys
+
             sys.stdout.buffer.write(stdout)
             sys.stdout.buffer.flush()
             print("\n\nstdout:")
             print(stdout)
             print("\n\nerror:")
-            print(e.object[max(0,e.start-20):e.end+20])
-            print(e.object[max(0,e.start-4):e.end+4])
-            print(e.object[max(0,e.start-1):e.end+1])
+            print(e.object[max(0, e.start - 20) : e.end + 20])
+            print(e.object[max(0, e.start - 4) : e.end + 4])
+            print(e.object[max(0, e.start - 1) : e.end + 1])
             while await run_cmd_queue.get():
                 pass
         lines += stderr.decode().replace('\r\n', '\n').split('\n')
@@ -123,6 +128,7 @@ async def run_cmd():
 
         await repaint_queue.put(True)
 
+
 async def repaint(args):
     global lines_lock
     global out_lines
@@ -138,13 +144,15 @@ async def repaint(args):
         more = len(lines) > termsize.lines
         if more:
             lastline = tokenize(lines[termsize.lines - 1])
-            lines = lines[:termsize.lines - 1]
-            moretext = format('...XmoreX...', f'^{termsize.columns}')[:termsize.columns]
+            lines = lines[: termsize.lines - 1]
+            moretext = format('...XmoreX...', f'^{termsize.columns}')[
+                : termsize.columns
+            ]
             start = 0
             while moretext[start].isspace():
                 start += 1
             end = len(moretext) - 1
-            while moretext[end-1].isspace():
+            while moretext[end - 1].isspace():
                 end -= 1
             moretext = moretext.replace('X', ' ')
             i = 0
@@ -175,6 +183,7 @@ async def repaint(args):
         for i in range(len(lines), termsize.lines):
             print('\n' + ' ' * termsize.columns, end=RESET)
 
+
 async def timer(args):
     global run_cmd_queue
     while True:
@@ -183,21 +192,24 @@ async def timer(args):
             now = datetime.datetime.now()
             elapsed = now.minute % args.on_minute
             elapsed *= 60
-            elapsed += now.second + now.microsecond / (10**6)
+            elapsed += now.second + now.microsecond / (10 ** 6)
             remainder = args.on_minute * 60 - elapsed
             await asyncio.sleep(remainder)
         else:
             await asyncio.sleep(args.interval)
+
 
 async def slow_repaint():
     await repaint_queue.put(True)
     await asyncio.sleep(0.2)
     await run_cmd_queue.put(True)
 
+
 # callback
 def sigwinchange_handler(*args):
     global repaint_queue
     asyncio.create_task(slow_repaint())
+
 
 async def async_do(args):
     global debug
@@ -218,6 +230,7 @@ async def async_do(args):
         repaint(args),
     )
 
+
 def do(args):
     global template_cmd
 
@@ -230,14 +243,47 @@ def do(args):
 
     asyncio.run(async_do(args))
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-n', '--interval', metavar='seconds', action='store', type=int, default=5, help='seconds to wait between updates')
-    parser.add_argument('-N', '--on-minute', metavar='minute(s)', action='store', type=int, help='update every N minutes on the minute')
-    parser.add_argument('-t', '--pseudo-terminal', action='store_true', help='run command using `script` to fake a TTY')
-    parser.add_argument('-i', '--interactive-shell', action='store_true', help='run command using `bash -i`')
-    parser.add_argument('-S', '--chop-long-lines', action='store_true', help='truncate instead of wrapping')
-    parser.add_argument('--debug', action='store_true', help='print repr instead of lines')
+    parser.add_argument(
+        '-n',
+        '--interval',
+        metavar='seconds',
+        action='store',
+        type=int,
+        default=5,
+        help='seconds to wait between updates',
+    )
+    parser.add_argument(
+        '-N',
+        '--on-minute',
+        metavar='minute(s)',
+        action='store',
+        type=int,
+        help='update every N minutes on the minute',
+    )
+    parser.add_argument(
+        '-t',
+        '--pseudo-terminal',
+        action='store_true',
+        help='run command using `script` to fake a TTY',
+    )
+    parser.add_argument(
+        '-i',
+        '--interactive-shell',
+        action='store_true',
+        help='run command using `bash -i`',
+    )
+    parser.add_argument(
+        '-S',
+        '--chop-long-lines',
+        action='store_true',
+        help='truncate instead of wrapping',
+    )
+    parser.add_argument(
+        '--debug', action='store_true', help='print repr instead of lines'
+    )
     parser.add_argument('command', nargs='*')
 
     args = parser.parse_args()

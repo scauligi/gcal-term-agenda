@@ -1,16 +1,19 @@
-from collections import OrderedDict
-from datetime import date, datetime, time, timedelta as t
-from dateutil.parser import parse as dateparse
-from dateutil.tz import tzlocal
-from time import sleep
-from unittest.mock import patch as mock_patch, MagicMock
 import json
 import pickle
 import re
 import socket
 import sqlite3
 import sys
+from collections import OrderedDict
+from datetime import date, datetime, time
+from datetime import timedelta as t
+from time import sleep
+from unittest.mock import MagicMock
+from unittest.mock import patch as mock_patch
+
 import yaml
+from dateutil.parser import parse as dateparse
+from dateutil.tz import tzlocal
 
 
 def base_datetime(thedate, thetime=None):
@@ -20,19 +23,26 @@ def base_datetime(thedate, thetime=None):
         tzinfo = tzlocal()
     return datetime.combine(thedate, thetime, tzinfo)
 
+
 def as_date(date_or_datetime, endtime=False):
     if isinstance(date_or_datetime, datetime):
         return date_or_datetime.date()
     return date_or_datetime - t(days=int(endtime))
 
+
 def as_datetime(date_or_datetime):
-    if isinstance(date_or_datetime, date) and not isinstance(date_or_datetime, datetime):
+    if isinstance(date_or_datetime, date) and not isinstance(
+        date_or_datetime, datetime
+    ):
         return base_datetime(date_or_datetime)
     return date_or_datetime
+
 
 # this exists purely because pyyaml is stupid
 # and parses datetimes back as naive (utc-based) datetimes
 tzl = tzlocal()
+
+
 def localize(dt):
     global tzl
     if isinstance(dt, datetime):
@@ -43,15 +53,18 @@ def localize(dt):
     return dt
 
 
-
 def new_auth(filename, scope='https://www.googleapis.com/auth/calendar'):
     from google_auth_oauthlib.flow import InstalledAppFlow
+
     try:
         flow = InstalledAppFlow.from_client_secrets_file(
-            'client_secret.json',
-            scopes=[scope])
+            'client_secret.json', scopes=[scope]
+        )
     except FileNotFoundError:
-        print('Please obtain an OAuth 2.0 Client ID from https://console.developers.google.com/apis/credentials and store it in a file "client_secret.json"', file=sys.stderr)
+        print(
+            'Please obtain an OAuth 2.0 Client ID from https://console.developers.google.com/apis/credentials and store it in a file "client_secret.json"',
+            file=sys.stderr,
+        )
         exit(1)
     credentials = flow.run_console()
 
@@ -69,9 +82,11 @@ def new_auth(filename, scope='https://www.googleapis.com/auth/calendar'):
 
     return credentials
 
+
 def get_http_auth(filename):
     import google.auth.transport.requests
     import google.oauth2.credentials
+
     try:
         with open(filename) as f:
             info = json.load(f)
@@ -92,12 +107,15 @@ def get_http_auth(filename):
 global _http_auth
 global _service
 _service = None
+
+
 def load_http_auth():
     import googleapiclient.discovery as discovery
+
     global _http_auth, _service
     _http_auth = get_http_auth('calendar.cred')
     _service = discovery.build('calendar', 'v3', credentials=_http_auth)
-    #print('calendar loaded')
+    # print('calendar loaded')
 
 
 def todateobj(d, tzname):
@@ -110,6 +128,7 @@ def todateobj(d, tzname):
         return d
     return ret
 
+
 def fromdateobj(o):
     if o is None:
         return None
@@ -119,6 +138,7 @@ def fromdateobj(o):
         return dateparse(o['dateTime'])
     else:
         raise Exception()
+
 
 class Event:
     def __init__(self, summary='', location=''):
@@ -177,6 +197,7 @@ class Event:
         evt._e = e
         return evt
 
+
 def _ev_entry(ev):
     return {
         'id': ev.id,
@@ -194,6 +215,7 @@ def _ev_entry(ev):
         'blob': pickle.dumps(ev._e, protocol=-1),
     }
 
+
 def get_visible_cals(cals):
     try:
         allCals = []
@@ -204,7 +226,12 @@ def get_visible_cals(cals):
         allCals = OrderedDict(allCals)
     except FileNotFoundError:
         selectedCals = filter(lambda cal: 'selected' in cal and cal['selected'], cals)
-        selectedCals = sorted(selectedCals, key=lambda cal: '' if 'primary' in cal and cal['primary'] else cal['summary'])
+        selectedCals = sorted(
+            selectedCals,
+            key=lambda cal: ''
+            if 'primary' in cal and cal['primary']
+            else cal['summary'],
+        )
         allCals = OrderedDict()
         data = []
         for cal in selectedCals:
@@ -219,20 +246,27 @@ def get_visible_cals(cals):
     allCals['all'] = allNames
     return allCals
 
+
 def download_evts(in_loop=False):
     db = sqlite3.connect('evts.sqlite3')
     with mock_patch('pickle.dumps'):
         keys = list(_ev_entry(MagicMock()).keys())
-    db.execute(f'create table if not exists events (id PRIMARY KEY,{",".join(keys[1:])})')
-    db.execute(f'create index if not exists id_date on events (root_id, startdate_index)')
-    db.execute(f'''create view if not exists events_recurring as
+    db.execute(
+        f'create table if not exists events (id PRIMARY KEY,{",".join(keys[1:])})'
+    )
+    db.execute(
+        f'create index if not exists id_date on events (root_id, startdate_index)'
+    )
+    db.execute(
+        f'''create view if not exists events_recurring as
                select a.*, count(*) - 1 as local_recurring
                from events a
                left join events b on a.root_id = b.root_id
                    and b.startdate_index >= a.startdate_index-14
                    and b.startdate_index <= a.startdate_index+14
                group by a.id
-               ''')
+               '''
+    )
     now = datetime.now(tzlocal())
     tries_remaining = 2 if not in_loop else 5
     while tries_remaining:
@@ -300,8 +334,11 @@ def download_evts(in_loop=False):
                     ev = Event.unpkg(e)
                     ev.calendar = calId
                     entries.append(_ev_entry(ev))
-            db.executemany(f'''insert into events values ({",".join(f":{key}" for key in keys)})
-                    on conflict(id) do update set {",".join(f"{key}=:{key}" for key in keys[1:])}''', entries)
+            db.executemany(
+                f'''insert into events values ({",".join(f":{key}" for key in keys)})
+                    on conflict(id) do update set {",".join(f"{key}=:{key}" for key in keys[1:])}''',
+                entries,
+            )
             db.executemany(f'''delete from events where id = ?''', deleting)
             if 'nextPageToken' in r:
                 kwargs['pageToken'] = r['nextPageToken']
@@ -316,6 +353,7 @@ def download_evts(in_loop=False):
         pickle.dump(obj, f, protocol=-1)
     db.commit()
     return obj
+
 
 def load_evts(*, print_warning=False, partial=False):
     now = datetime.now(tzlocal())
@@ -340,21 +378,27 @@ def load_evts(*, print_warning=False, partial=False):
 
     return obj
 
+
 def singleDay(summary, d):
     evt = Event(summary)
     evt.start = d
     evt.end = d + t(days=1)
     return evt
 
+
 HttpError = None
+
+
 def s():
     global _service
     global HttpError
     if _service is None:
         load_http_auth()
         import googleapiclient.errors
+
         HttpError = googleapiclient.errors.HttpError
     return _service
+
 
 def submit(evt, tzname, calId):
     return s().events().insert(calendarId=calId, body=evt.pkg(tzname)).execute()
@@ -363,6 +407,7 @@ def submit(evt, tzname, calId):
 if __name__ == '__main__':
     load_http_auth()
     from pprint import pprint
+
     res = s().calendarList().list().execute()
     for item in res['items']:
         print(format(item['summary'], '<30'), item['id'])
