@@ -19,7 +19,6 @@ from dateutil.tz import tzlocal
 
 import gcal
 from colortrans import rgb2short, short2rgb
-from doublebuffer import tokenize
 from gcal import Event, as_date, as_datetime, base_datetime
 
 TerminalSize = namedtuple('TerminalSize', ['columns', 'lines'])
@@ -61,6 +60,22 @@ DGRAY = fg(235)
 NOWLINE_COLOR = fg(66)
 RESET = '\033[0m'
 WBOLD = '\033[0;1m'
+
+
+def tokenize(line):
+    chars = list(line)
+    tokens = []
+    while chars:
+        c = chars.pop(0)
+        if c == '\033':
+            token = c
+            while chars and c != 'm':
+                c = chars.pop(0)
+                token += c
+            tokens.append(token)
+        else:
+            tokens.append(c)
+    return tokens
 
 
 def blen(line):

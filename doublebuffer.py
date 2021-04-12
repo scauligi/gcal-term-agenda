@@ -3,93 +3,53 @@
 import argparse
 import asyncio
 import datetime
-import os
 import re
 import signal
 import subprocess
+from functools import partial
+
+import blessed
+from wcwidth import wcwidth
 
 import tailf
 
-HIDE_CURSOR = '\033[?25l'
-SWITCH_TO_ALT = '\033[?1049h'
-CLEAR_TERM = '\033[H'
-SWITCH_TO_NORM = '\033[?1049l'
-SHOW_CURSOR = '\033[?25h'
-RESET = '\033[0m'
 
-
-def tokenize(line):
-    chars = list(line)
-    tokens = []
-    while chars:
-        c = chars.pop(0)
-        if c == '\033':
-            token = c
-            while chars and c != 'm':
-                c = chars.pop(0)
-                token += c
-            tokens.append(token)
+def chop(line, width=None):
+    if width is None:
+        width = term.width
+    nline = list(blessed.sequences.iter_parse(term, line))
+    length = sum(max(wcwidth(text), 0) for text, cap in nline if cap is None)
+    endcaps = []
+    while length > width and nline:
+        text, cap = nline.pop()
+        if cap is None:
+            length -= max(wcwidth(text), 0)
         else:
-            tokens.append(c)
-    return tokens
-
-
-def linesplit(oldtokenlines, columns, chop=False):
-    counter = 0
-    tokenlines = []
-    for tokens in oldtokenlines:
-        counter = 0
-        tokenlines.append([])
-        rtokens = list(reversed(tokens))
-        while rtokens:
-            token = rtokens.pop()
-            if token.startswith('\033'):
-                tokenlines[-1].append(token)
-            elif token == '\t':
-                padding = 8 - (counter % 8)
-                rtokens.extend(' ' * padding)
-            else:
-                if counter == columns:
-                    counter = 0
-                    tokenlines.append([])
-                counter += 1
-                tokenlines[-1].append(token)
-                if counter == columns and chop:
-                    break
-        tokenlines[-1].append(' ' * (columns - counter))
-    tokenlines = [''.join(tokens) for tokens in tokenlines]
-    return tokenlines
-
-
-def quote(s):
-    s = s.replace('\\', '\\\\')
-    s = s.replace('"', '\\"')
-    return s
+            endcaps.insert(0, text)
+    return ''.join(text for text, _ in nline) + ''.join(endcaps)
 
 
 debug = False
 chop_long_lines = False
 template_cmd = None
 
-lines_lock = None
+term = blessed.Terminal()
 out_lines = []
 
 
-def templatize(termsize, s):
-    s = s.replace('%W', str(termsize.columns))
-    s = s.replace('%H', str(termsize.lines))
-    s = re.sub(r'%{H\+(\d+)}', lambda m: str(termsize.lines + int(m[1])), s)
+def templatize(s):
+    s = s.replace('%W', str(term.width))
+    s = s.replace('%H', str(term.height))
+    s = re.sub(r'%{H\+(\d+)}', lambda m: str(term.height + int(m[1])), s)
     return s
 
 
 async def run_cmd():
     global debug
     global template_cmd
-    global lines_lock
     global out_lines
 
-    termsize = os.get_terminal_size()
-    cmd = tuple(templatize(termsize, arg) for arg in template_cmd)
+    cmd = tuple(templatize(arg) for arg in template_cmd)
 
     capture = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -103,63 +63,35 @@ async def run_cmd():
     if debug:
         lines = list(map(repr, lines))
 
-    tokenlines = [tokenize(line) for line in lines]
-
-    async with lines_lock:
-        out_lines = tokenlines
-
+    out_lines = lines
     asyncio.create_task(repaint())
 
 
+MORE = '... more ...'
+
+
 async def repaint():
-    global lines_lock
     global out_lines
 
-    async with lines_lock:
-        tokenlines = out_lines[:]
+    lines = out_lines[:]
 
-    termsize = os.get_terminal_size()
-    lines = linesplit(tokenlines, termsize.columns, chop_long_lines)
+    lines = (
+        list(map(partial(chop, width=term.width), lines)) if chop_long_lines else lines
+    )
 
-    more = len(lines) > termsize.lines
+    more = len(lines) > term.height
     if more:
-        lastline = tokenize(lines[termsize.lines - 1])
-        lines = lines[: termsize.lines - 1]
-        moretext = format('...XmoreX...', f'^{termsize.columns}')[: termsize.columns]
-        start = 0
-        while moretext[start].isspace():
-            start += 1
-        end = len(moretext) - 1
-        while moretext[end - 1].isspace():
-            end -= 1
-        moretext = moretext.replace('X', ' ')
-        i = 0
-        text = ''
-        lastcode = RESET
-        while i < start:
-            token = lastline.pop(0)
-            text += token
-            if token.startswith('\033'):
-                lastcode = token
-            else:
-                i += 1
-        # dark blue
-        text += '\033[38;5;24m'
-        while i < end:
-            text += moretext[i]
-            i += 1
-            token = lastline.pop(0)
-            while token.startswith('\033'):
-                lastcode = token
-                token = lastline.pop(0)
-        text += lastcode
-        text += ''.join(lastline)
-        lines.append(text)
+        lines = lines[: term.height]
+        moretext = format(MORE, f'^{term.width}')
+        start = moretext.find(MORE)
+        moretext = moretext[: term.width].strip()
+        moretext = term.move_yx(term.height - 1, start) + term.dodgerblue4 + moretext
+        lines[-1] += moretext
 
-    print(CLEAR_TERM, end='')
-    print('\n'.join(lines), end=RESET)
-    for i in range(len(lines), termsize.lines):
-        print('\n' + ' ' * termsize.columns, end=RESET)
+    print(term.normal, term.clear, sep='', end='')
+    for i, line in enumerate(lines):
+        print(term.move_yx(i, 0), line, sep='', end='')
+    print(end='', flush=True)
 
 
 async def timer(args):
@@ -195,11 +127,9 @@ def sigwinchange_handler(*args):
 
 async def async_do(args):
     global debug
-    global lines_lock
 
     debug = args.debug
 
-    lines_lock = asyncio.Lock()
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGWINCH, sigwinchange_handler)
     await asyncio.gather(asyncio.to_thread(watcher, loop, args), timer(args))
@@ -276,10 +206,6 @@ if __name__ == '__main__':
         if 60 % args.on_minute:
             print('no')
             exit(1)
-    print(HIDE_CURSOR, end='', flush=True)
-    print(SWITCH_TO_ALT, end='', flush=True)
-    try:
+
+    with term.fullscreen(), term.hidden_cursor():
         do(args)
-    finally:
-        print(SWITCH_TO_NORM, end='', flush=True)
-        print(SHOW_CURSOR, end='', flush=True)
