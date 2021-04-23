@@ -21,7 +21,7 @@ from dateutil.tz import tzlocal
 import gcal
 from gcal import Event, as_date, as_datetime, base_datetime
 
-TerminalSize = namedtuple('TerminalSize', ['columns', 'lines'])
+TerminalSize = namedtuple('TerminalSize', ['columns', 'lines', 'columns_auto', 'lines_auto'])
 
 # https://stackoverflow.com/a/43950235
 # Monkey patch to force IPv4
@@ -736,15 +736,6 @@ def fourweek(
         line = line[:-1] + right
         return LGRAY + line + RESET
 
-    # set up table borders
-    table.append(do_row(DASH, *CORNERS[0]))
-    for _ in range(table_height):
-        for _ in range(inner_height):
-            table.append([])
-        table.append(do_row(DASH, *CORNERS[1]))
-    table.pop()
-    table.append(do_row(DASH, *CORNERS[2]))
-
     obj, _evt2short = objs
     now = datetime.now(tzlocal())
     nowdate = now.date()
@@ -798,13 +789,31 @@ def fourweek(
                     text = fg(evt2short(evt)) + text + RESET
                     cells[cellnum][choice(evt)].append(text)
 
-    # overwrite table with content of cells
     for i in range(table_height):
         for j in range(table_width):
             cell, cell_recurring = cells[i * table_width + j]
             if cell:
                 cell.append(' ' * inner_width)
             cell.extend(cell_recurring)
+            cells[i * table_width + j] = cell
+
+    max_inner_height = max(len(cell) for cell in cells) + 2
+    if termsize.lines_auto:
+        inner_height = min(inner_height, max_inner_height)
+
+    # set up table borders
+    table.append(do_row(DASH, *CORNERS[0]))
+    for _ in range(table_height):
+        for _ in range(inner_height):
+            table.append([])
+        table.append(do_row(DASH, *CORNERS[1]))
+    table.pop()
+    table.append(do_row(DASH, *CORNERS[2]))
+
+    # overwrite table with content of cells
+    for i in range(table_height):
+        for j in range(table_width):
+            cell = cells[i * table_width + j]
             for l in range(inner_height):
                 lineIndex = i * (inner_height + 1) + l + 1
                 text = ' ' * inner_width
@@ -1301,14 +1310,14 @@ def main():
     )
     args, remainder = parser.parse_known_args()
 
-    termsize = TerminalSize(args.width, args.height)
+    termsize = TerminalSize(args.width, args.height, False, False)
     if termsize[0] is None or termsize[1] is None:
         try:
             term_dimensions = os.get_terminal_size()
             if termsize.columns is None:
-                termsize = termsize._replace(columns=term_dimensions.columns)
+                termsize = termsize._replace(columns=term_dimensions.columns, columns_auto=True)
             if termsize.lines is None:
-                termsize = termsize._replace(lines=term_dimensions.lines - 1)
+                termsize = termsize._replace(lines=term_dimensions.lines - 1, lines_auto=True)
         except OSError:
             pass
 
