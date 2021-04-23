@@ -175,7 +175,7 @@ class Event:
 
     @classmethod
     def unpkg(cls, e):
-        evt = cls(e['summary'])
+        evt = cls(e.get('summary', "───"))
         for person in e.get('attendees', []):
             if person.get('self', False) and person['responseStatus'] == 'declined':
                 evt.cancelled = True
@@ -247,7 +247,7 @@ def get_visible_cals(cals):
     return allCals
 
 
-def download_evts(in_loop=False):
+def download_evts(calendar=None, in_loop=False):
     db = sqlite3.connect('evts.sqlite3')
     with mock_patch('pickle.dumps'):
         keys = list(_ev_entry(MagicMock()).keys())
@@ -289,10 +289,17 @@ def download_evts(in_loop=False):
     allCals = get_visible_cals(cals)
     try:
         old_obj = load_evts(print_warning=False, partial=True)
-        syncTokens = {cal['id']: cal.get('syncToken') for cal in old_obj['calendars']}
+        for cal in old_obj['calendars']:
+            calmap[cal['id']]['syncToken'] = cal.get('syncToken')
     except FileNotFoundError:
-        syncTokens = {}
-    for calId in allCals.values():
+        pass
+
+    if calendar is not None:
+        calsToDownload = [calendar]
+    else:
+        calsToDownload = allCals.values()
+
+    for calId in calsToDownload:
         if not isinstance(calId, str) or '@' not in calId:
             continue
         print(f'downloading {calId}...')
@@ -300,7 +307,7 @@ def download_evts(in_loop=False):
             'calendarId': calId,
             'singleEvents': True,
             'maxResults': 2500,
-            'syncToken': syncTokens.get(calId),
+            'syncToken': calmap[calId].get('syncToken'),
         }
         pagenum = 0
         while True:
@@ -313,8 +320,7 @@ def download_evts(in_loop=False):
                 if int(e.resp['status']) == 410:
                     print("  410'd, redownloading...")
                     db.execute(f'''delete from events where calendar = ?''', (calId,))
-                    if calId in syncTokens:
-                        del syncTokens[calId]
+                    calmap[calId].pop('syncToken', None)
                     if 'syncToken' in kwargs:
                         del kwargs['syncToken']
                     if 'pageToken' in kwargs:

@@ -14,11 +14,11 @@ from datetime import timedelta as t
 from datetime import timezone
 from itertools import zip_longest
 
+import blessed
 import yaml
 from dateutil.tz import tzlocal
 
 import gcal
-from colortrans import rgb2short, short2rgb
 from gcal import Event, as_date, as_datetime, base_datetime
 
 TerminalSize = namedtuple('TerminalSize', ['columns', 'lines'])
@@ -50,7 +50,13 @@ class reversor:
         return other.obj < self.obj
 
 
+term = blessed.Terminal()
+term.number_of_colors = 256 ** 3
+
+
 def fg(short):
+    if isinstance(short, tuple):
+        return term.color_rgb(*short)
     return f'\033[38;5;{short}m'
 
 
@@ -260,9 +266,9 @@ def make_evt2short(obj):
         v = max(rgb)
         new_v = max(v - 70, 0)
         scaling = new_v / v
-        dark_code = ''.join(f'{round(x*scaling):02x}' for x in rgb)
-        cal2short[cal['id']] = rgb2short(code)[0]
-        cal2dark[cal['id']] = rgb2short(dark_code)[0]
+        dark_rgb = [round(x * scaling) for x in rgb]
+        cal2short[cal['id']] = tuple(rgb)
+        cal2dark[cal['id']] = tuple(dark_rgb)
 
     def evt2short(evt, dark=False):
         if dark:
@@ -675,7 +681,7 @@ def listcal(todate, calendars, no_recurring=False, forced=False, objs=None):
         fmt += ' '
         fmt += fg(evt2short(evt, dark=dark)) + evt.summary + RESET
         fmt += ' '
-        fmt += white + tdtime(evt.end - evt.start) + RESET
+        fmt += white + tdtime(evt.end - evt.start).replace('1 day', '') + RESET
         table.append(fmt)
     return table
 
@@ -1278,6 +1284,13 @@ def main():
         action='store_true',
         help="don't print anything, just refresh the calendar cache",
     )
+    group.add_argument(
+        '-D',
+        '--download-cal',
+        action='store',
+        metavar='ID',
+        help="don't print anything, just download the named calendar",
+    )
     group.add_argument('--server', action='store_true', help="start server")
     group.add_argument('--client', action='store_true', help="run as client")
     parser.add_argument(
@@ -1304,6 +1317,10 @@ def main():
 
     if args.download_only:
         gcal.download_evts()
+        print('loaded ok:', datetime.now())
+        exit(0)
+    elif args.download_cal:
+        gcal.download_evts(args.download_cal)
         print('loaded ok:', datetime.now())
         exit(0)
     elif args.server:

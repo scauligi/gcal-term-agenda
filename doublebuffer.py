@@ -2,10 +2,12 @@
 
 import argparse
 import asyncio
+import concurrent.futures
 import datetime
 import re
 import signal
 import subprocess
+import threading
 from functools import partial
 
 import blessed
@@ -35,6 +37,7 @@ template_cmd = None
 
 term = blessed.Terminal()
 out_lines = []
+out_lines_lock = threading.Lock()
 
 
 def templatize(s):
@@ -44,17 +47,19 @@ def templatize(s):
     return s
 
 
-async def run_cmd():
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+
+def run_cmd(loop):
     global debug
     global template_cmd
     global out_lines
+    global out_lines_lock
 
     cmd = tuple(templatize(arg) for arg in template_cmd)
 
-    capture = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    stdout, stderr = await capture.communicate()
+    capture = subprocess.run(cmd, capture_output=True)
+    stdout, stderr = capture.stdout, capture.stderr
     lines = stdout.decode(errors='ignore').replace('\r\n', '\n').split('\n')
     lines += stderr.decode().replace('\r\n', '\n').split('\n')
     while lines and (not lines[-1] or lines[-1].isspace()):
@@ -63,8 +68,9 @@ async def run_cmd():
     if debug:
         lines = list(map(repr, lines))
 
-    out_lines = lines
-    asyncio.create_task(repaint())
+    with out_lines_lock:
+        out_lines = lines
+    asyncio.run_coroutine_threadsafe(repaint(), loop)
 
 
 MORE = '... more ...'
@@ -72,8 +78,10 @@ MORE = '... more ...'
 
 async def repaint():
     global out_lines
+    global out_lines_lock
 
-    lines = out_lines[:]
+    with out_lines_lock:
+        lines = out_lines[:]
 
     lines = (
         list(map(partial(chop, width=term.width), lines)) if chop_long_lines else lines
@@ -88,7 +96,7 @@ async def repaint():
         moretext = term.move_yx(term.height - 1, start) + term.dodgerblue4 + moretext
         lines[-1] += moretext
 
-    print(term.normal, term.clear, sep='', end='')
+    print(term.home, term.normal, term.clear, sep='', end='')
     for i, line in enumerate(lines):
         print(term.move_yx(i, 0), line, sep='', end='')
     print(end='', flush=True)
@@ -96,7 +104,7 @@ async def repaint():
 
 async def timer(args):
     while True:
-        asyncio.create_task(run_cmd())
+        executor.submit(run_cmd, asyncio.get_running_loop())
         if args.on_minute:
             now = datetime.datetime.now()
             elapsed = now.minute % args.on_minute
@@ -108,16 +116,16 @@ async def timer(args):
             await asyncio.sleep(args.interval)
 
 
-def watcher(loop, args):
+# run in separate thread
+def watcher(args, loop):
     if args.watch:
         for _ in tailf.watch_file(args.watch):
-            asyncio.run_coroutine_threadsafe(run_cmd(), loop)
+            executor.submit(run_cmd, loop)
 
 
 async def slow_repaint():
     asyncio.create_task(repaint())
-    await asyncio.sleep(0.2)
-    asyncio.create_task(run_cmd())
+    executor.submit(run_cmd, asyncio.get_running_loop())
 
 
 # callback
@@ -132,7 +140,7 @@ async def async_do(args):
 
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGWINCH, sigwinchange_handler)
-    await asyncio.gather(asyncio.to_thread(watcher, loop, args), timer(args))
+    await asyncio.gather(asyncio.to_thread(watcher, args, loop), timer(args))
 
 
 def do(args):
@@ -207,5 +215,5 @@ if __name__ == '__main__':
             print('no')
             exit(1)
 
-    with term.fullscreen(), term.hidden_cursor():
+    with term.fullscreen(), term.hidden_cursor(), term.cbreak():
         do(args)
