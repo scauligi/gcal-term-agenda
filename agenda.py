@@ -2,6 +2,7 @@
 
 import argparse
 import calendar
+import contextlib
 import os
 import pickle
 import re
@@ -11,17 +12,16 @@ from collections import defaultdict as ddict
 from collections import namedtuple
 from datetime import date, datetime, time
 from datetime import timedelta as t
-from datetime import timezone
-from itertools import zip_longest
 
 import blessed
-import yaml
 from dateutil.tz import tzlocal
 
 import gcal
 from gcal import Event, as_date, as_datetime, base_datetime
 
-TerminalSize = namedtuple('TerminalSize', ['columns', 'lines', 'columns_auto', 'lines_auto'])
+TerminalSize = namedtuple(
+    'TerminalSize', ['columns', 'lines', 'columns_auto', 'lines_auto']
+)
 
 # https://stackoverflow.com/a/43950235
 # Monkey patch to force IPv4
@@ -95,15 +95,13 @@ def shorten(text, inner_width):
 
 
 def bshorten(text, max_width):
-    if max_width is None:
-        max_width = min_width
     text = text.rstrip()
-    l = blen(text)
-    if l > max_width:
+    textlen = blen(text)
+    if textlen > max_width:
         tokens = tokenize(text)
-        while tokens and l > max_width - 1:
+        while tokens and textlen > max_width - 1:
             if not (lastchar := tokens.pop()).startswith('\033'):
-                l -= 1
+                textlen -= 1
         if lastchar == '─':
             # hacky!
             tokens.append('┄')
@@ -114,7 +112,7 @@ def bshorten(text, max_width):
 
 
 def _strippable(token):
-    return (token.isspace() and not token == '\xa0') or token.startswith('\033')
+    return (token.isspace() and token != '\xa0') or token.startswith('\033')
 
 
 def brstrip(text):
@@ -138,19 +136,19 @@ def place(text, offset, row):
                     break
             offset += blen(text) + 1
         return row
-    l = blen(row)
-    if l <= offset:
-        row += ' ' * (offset - l)
+    rowlen = blen(row)
+    if rowlen <= offset:
+        row += ' ' * (offset - rowlen)
         return row + text
-    elif offset + blen(text) < l:
+    elif offset + blen(text) < rowlen:
         tokens = tokenize(row)
         aftertokens = []
         lastcode = None
-        while l > offset:
+        while rowlen > offset:
             tok = tokens.pop()
             aftertokens.append(tok)
             if not tok.startswith('\033'):
-                l -= 1
+                rowlen -= 1
         if lastcode is None:
             for tok in reversed(tokens):
                 if tok.startswith('\033'):
@@ -158,11 +156,11 @@ def place(text, offset, row):
                     break
             else:
                 lastcode = RESET
-        l = blen(text)
-        while l > 0:
+        rowlen = blen(text)
+        while rowlen > 0:
             tok = aftertokens.pop()
             if not tok.startswith('\033'):
-                l -= 1
+                rowlen -= 1
             else:
                 lastcode = tok
         return (
@@ -170,9 +168,9 @@ def place(text, offset, row):
         )
     else:
         tokens = tokenize(row)
-        while l > offset:
+        while rowlen > offset:
             if not tokens.pop().startswith('\033'):
-                l -= 1
+                rowlen -= 1
         return ''.join(tokens) + RESET + text
 
 
@@ -476,9 +474,7 @@ class Agenda:
 
                     # place into leftmost region that is large enough
                     prev_end = 0
-                    for i, (icol_index, initial, text) in enumerate(
-                        sorted(contents[tickt])
-                    ):
+                    for (icol_index, initial, text) in sorted(contents[tickt]):
                         if icol_index != col_index:
                             continue
                         if initial - prev_end >= blen(summary):
@@ -489,7 +485,6 @@ class Agenda:
 
                     # drop anchor on long events
                     if expand:
-                        lasttick = self.quantize(evt.end, endtime=True)
                         for endtick in self._until(tock, evt.end):
                             endtock = endtick + self.interval
                             if evt.end == endtock:
@@ -500,9 +495,8 @@ class Agenda:
                                 text = '┴┴┴ ({}) '.format(ftime(evt.end).strip())
                             else:
                                 text = '\0│\0\0'
-                            if locations:
-                                if locstrs:
-                                    text += locstrs.pop(0) + '  '
+                            if locations and locstrs:
+                                text += locstrs.pop(0) + '  '
                             text = fg(self.evt2short(evt)) + text + RESET
                             contents[endtick.time()].append((col_index, initial, text))
                             endtick += self.interval
@@ -662,7 +656,6 @@ def listcal(todate, calendars, no_recurring=False, forced=False, objs=None):
         if no_recurring and evt.recurring:
             continue
         start = as_datetime(evt.start)
-        end = as_datetime(evt.end)
         seen[evt.uid] += 1
         if seen[evt.uid] > 1:
             continue
@@ -713,7 +706,6 @@ def fourweek(
 
     table = []
 
-    today = base_datetime(todate)
     offset = todate.isoweekday() % 7
     rev_offset = 0
     if zero_offset:
@@ -814,10 +806,10 @@ def fourweek(
     for i in range(table_height):
         for j in range(table_width):
             cell = cells[i * table_width + j]
-            for l in range(inner_height):
-                lineIndex = i * (inner_height + 1) + l + 1
+            for k in range(inner_height):
+                lineIndex = i * (inner_height + 1) + k + 1
                 text = ' ' * inner_width
-                if l == 0:
+                if k == 0:
                     celldate = todate + t(days=(i * table_width + j - offset))
                     datetext = dtime(celldate)
                     dcolor = LGRAY
@@ -829,17 +821,17 @@ def fourweek(
                         + shorten(f'{datetext:^{inner_width}}', inner_width)
                         + RESET
                     )
-                elif l == 1:
+                elif k == 1:
                     text = LGRAY + DASH * inner_width + RESET
                 else:
-                    l -= 2
-                    if l + 2 == inner_height - 1 and len(cell) > l + 1:
+                    k -= 2
+                    if k + 2 == inner_height - 1 and len(cell) > k + 1:
                         text = shorten(
                             format('... more ...', f'^{inner_width}'), inner_width
                         )
                         text = fg(4) + text + RESET
-                    elif l < len(cell):
-                        text = cell[l]
+                    elif k < len(cell):
+                        text = cell[k]
                 table[lineIndex].append(text)
 
     newtable = []
@@ -1075,7 +1067,7 @@ def server():
                     evt2short = make_evt2short(obj)
                     objs = (obj, evt2short)
                 print(datetime.now(), 'loaded ok')
-            except Exception as e:
+            except Exception:
                 print('EXCEPTION: do_download:')
                 traceback.print_exc()
         print('INFO: do_download stopped')
@@ -1125,10 +1117,8 @@ def server():
             cleanup()
 
     def cleanup(_signum=None, _frame=None):
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.remove(SOCK)
-        except:
-            pass
         exit(1)
 
     asyncio.run(start_server())
@@ -1315,9 +1305,13 @@ def main():
         try:
             term_dimensions = os.get_terminal_size()
             if termsize.columns is None:
-                termsize = termsize._replace(columns=term_dimensions.columns, columns_auto=True)
+                termsize = termsize._replace(
+                    columns=term_dimensions.columns, columns_auto=True
+                )
             if termsize.lines is None:
-                termsize = termsize._replace(lines=term_dimensions.lines - 1, lines_auto=True)
+                termsize = termsize._replace(
+                    lines=term_dimensions.lines - 1, lines_auto=True
+                )
         except OSError:
             pass
 

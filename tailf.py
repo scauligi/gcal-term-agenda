@@ -1,3 +1,7 @@
+"""
+TODO: docstring
+"""
+
 import contextlib
 import os.path
 
@@ -22,4 +26,4 @@ def contents_on_change(path, mode='r', *, callback):
 
 def sub_blocking(path, mode='r'):
     for contents in contents_on_change(path, mode, callback=lambda f: f.read()):
-        yield (contents.splitlines() if mode == 'r' else contents)
+        yield contents.splitlines() if mode == 'r' else contents
