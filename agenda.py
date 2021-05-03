@@ -758,6 +758,11 @@ def fourweek(
 
     callist = filter_calendars(obj, calendars)
 
+    OPEN = object()
+    CLOSED = object()
+    weekcells = [
+        [ddict(lambda: OPEN) for _ in range(table_width)] for _ in range(table_height)
+    ]
     cells = [(list(), list()) for _ in range(table_width * table_height)]
 
     calstart = todate - t(days=offset)
@@ -773,34 +778,77 @@ def fourweek(
         if no_recurring and evt.recurring:
             continue
         start = as_datetime(evt.start)
-        end = as_datetime(evt.end)
         cellnum = (start.date() - calstart).days
         if cellnum in range(0, len(cells)):
             if isinstance(evt.start, datetime):
                 text = ftime(evt.start) + ' ' + evt.summary
+                text = shorten(text, inner_width)
+                text = fg(evt2short(evt)) + text + RESET
+                cells[cellnum][choice(evt)].append(text)
             else:
+                # full-day event
+                # code copied from weekview, need to DRY
                 text = ' ' + evt.summary
-            text = shorten(text, inner_width)
-            text = fg(evt2short(evt)) + text + RESET
-            cells[cellnum][choice(evt)].append(text)
-        if not isinstance(evt.start, datetime) and (end - start).days > 1:
-            for day in range(1, (evt.end - evt.start).days):
-                cellnum = (start.date() - calstart).days + day
-                if cellnum in range(0, len(cells)):
-                    text = '> ' + evt.summary
-                    text = shorten(text, inner_width)
-                    text = fg(evt2short(evt)) + text + RESET
-                    cells[cellnum][choice(evt)].append(text)
+                start_week = cellnum // table_width
+                end_week = (cellnum + (evt.end - evt.start).days - 1) // table_width
+                for week in range(start_week, end_week + 1):
+                    weekstart = calstart + t(days=(week * table_width))
+                    incellnum = (max(evt.start, weekstart) - weekstart).days
+                    ndays = (
+                        min(evt.end, weekstart + t(days=table_width))
+                        - max(evt.start, weekstart)
+                    ).days
+                    daycells = weekcells[week]
+                    subcells = daycells[incellnum : incellnum + ndays]
+                    topslot = max(map(len, subcells))
+                    for j in range(topslot):
+                        if all(
+                            j >= len(daycell) or daycell[j] is OPEN
+                            for daycell in subcells
+                        ):
+                            # found an empty slot range
+                            break
+                    else:
+                        j = topslot
+
+                    if evt.start < weekstart:
+                        text = '┄' + text
+
+                    if (evt.end - evt.start).days > 1:
+                        outlen = ndays * (inner_width + 1) - 1
+                        text += ' ' + DASH * (outlen - len(evt.summary) - 3) + '>'
+                    else:
+                        text = shorten(text, inner_width)
+
+                    daycell = subcells[0]
+                    assert daycell[j] is OPEN
+                    daycell[j] = fg(evt2short(evt)) + text + RESET
+
+                    for daycell in subcells[1:]:
+                        assert daycell[j] is OPEN
+                        daycell[j] = CLOSED
+
+    filled_cells = []
 
     for i in range(table_height):
+        daycells = weekcells[i]
         for j in range(table_width):
+            daycell = daycells[j]
             cell, cell_recurring = cells[i * table_width + j]
-            if cell:
-                cell.append(' ' * inner_width)
-            cell.extend(cell_recurring)
-            cells[i * table_width + j] = cell
+            filled_cell = []
+            for text in daycell.values():
+                if text == OPEN:
+                    text = ' ' * inner_width
+                elif text == CLOSED:
+                    text = None
+                filled_cell.append(text)
+            filled_cell.extend(cell)
+            if filled_cell:
+                filled_cell.append(' ' * inner_width)
+            filled_cell.extend(cell_recurring)
+            filled_cells.append(filled_cell)
 
-    max_inner_height = max(len(cell) for cell in cells) + 2
+    max_inner_height = max(len(cell) for cell in filled_cells) + 2
     if termsize.lines_auto:
         inner_height = min(inner_height, max_inner_height)
 
@@ -816,7 +864,7 @@ def fourweek(
     # overwrite table with content of cells
     for i in range(table_height):
         for j in range(table_width):
-            cell = cells[i * table_width + j]
+            cell = filled_cells[i * table_width + j]
             for k in range(inner_height):
                 lineIndex = i * (inner_height + 1) + k + 1
                 text = ' ' * inner_width
@@ -850,11 +898,12 @@ def fourweek(
         if isinstance(line, list):
             text = ''
             for i, segment in enumerate(line):
-                if rev_offset and rev_offset == i:
-                    text += LGRAY + THICK + RESET
-                else:
-                    text += LGRAY + PIPE + RESET
-                text += segment
+                if segment is not None:
+                    if rev_offset and rev_offset == i:
+                        text += LGRAY + THICK + RESET
+                    else:
+                        text += LGRAY + PIPE + RESET
+                    text += segment
             text += LGRAY + PIPE + RESET
             newtable.append(text)
         else:
