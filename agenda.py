@@ -347,9 +347,12 @@ class Agenda:
             tzinfo=thetime.tzinfo,
         )
 
-    def agenda_table(self, todate, ndays=None, print_warning=True):
+    def agenda_table(self, todate, ndays=None, starttime=None, print_warning=True):
         self.todate = todate
         self.has_later = False
+
+        if starttime is None:
+            starttime = time(tzinfo=tzlocal())
 
         # table[0] is the time column
         # table[n] is the event column for day n
@@ -390,7 +393,7 @@ class Agenda:
             if startindex >= 0:
                 tickt = self.quantize(evt.start).time()
             else:
-                tickt = time(0, 0, tzinfo=tzlocal())
+                tickt = starttime
             table[0][tickt] = tickt
             table[index][tickt].append(evt)
 
@@ -503,7 +506,9 @@ class Agenda:
                             if locations and locstrs:
                                 text += locstrs.pop(0) + '  '
                             text = fg(self.evt2short(evt)) + text + RESET
-                            contents[endtick.time()].append((col_index + col_offset, initial, text))
+                            contents[endtick.time()].append(
+                                (col_index + col_offset, initial, text)
+                            )
                             endtick += self.interval
         for tickt in contents:
             contents[tickt].sort()
@@ -868,6 +873,7 @@ def weekview(
     dark_recurring=False,
     zero_offset=False,
     interval=None,
+    starttime=None,
 ):
     table_width = week_ndays if week_ndays > 0 else 7
     interval = interval or 30
@@ -883,7 +889,11 @@ def weekview(
     agendamaker = Agenda(
         calendars, objs=objs, dark_recurring=dark_recurring, interval=interval
     )
-    timecol, *evtcols = agendamaker.agenda_table(weekstart, ndays=table_width)
+    if starttime is not None:
+        starttime = time(starttime, tzinfo=tzlocal())
+    timecol, *evtcols = agendamaker.agenda_table(
+        weekstart, ndays=table_width, starttime=starttime
+    )
 
     todate_offset = (agendamaker.now.date() - weekstart).days
     has_todate = 0 <= todate_offset < week_ndays
@@ -1197,6 +1207,14 @@ def parse_args(argv, termsize, objs=None):
         type=int,
         help='print a multi-day view (of N days)',
     )
+    parser.add_argument(
+        '-s',
+        '--start-time',
+        metavar='N',
+        action='store',
+        type=int,
+        help="start the week's day at this time",
+    )
     parser.add_argument('date', nargs='*', help='use this date instead of today')
     args, remain = parser.parse_known_args(argv)
     if remain:
@@ -1265,6 +1283,7 @@ def parse_args(argv, termsize, objs=None):
             dark_recurring=args.no_recurring,
             zero_offset=args.zero_offset,
             interval=args.interval,
+            starttime=args.start_time,
             objs=objs,
         )
     else:
