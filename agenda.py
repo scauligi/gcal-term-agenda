@@ -378,7 +378,8 @@ class Agenda:
         for evt in events:
             # get column (1-indexed)
             # accounts for events that start before the first day
-            index = max((as_date(evt.start) - todate).days, 0) + 1
+            startindex = (as_date(evt.start) - todate).days
+            index = max(startindex, 0) + 1
             if not isinstance(evt.start, datetime):
                 # full-day event
                 if evt.id not in self.seen_events:
@@ -386,7 +387,10 @@ class Agenda:
                     self.seen_events.add(evt.id)
                 continue
             # timeblock event
-            tickt = self.quantize(evt.start).time()
+            if startindex >= 0:
+                tickt = self.quantize(evt.start).time()
+            else:
+                tickt = time(0, 0, tzinfo=tzlocal())
             table[0][tickt] = tickt
             table[index][tickt].append(evt)
 
@@ -486,6 +490,7 @@ class Agenda:
                     # drop anchor on long events
                     if expand:
                         for endtick in self._until(tock, evt.end):
+                            col_offset = (endtick.date() - tick.date()).days
                             endtock = endtick + self.interval
                             if evt.end == endtock:
                                 # \xa0 is non-breaking space
@@ -498,7 +503,7 @@ class Agenda:
                             if locations and locstrs:
                                 text += locstrs.pop(0) + '  '
                             text = fg(self.evt2short(evt)) + text + RESET
-                            contents[endtick.time()].append((col_index, initial, text))
+                            contents[endtick.time()].append((col_index + col_offset, initial, text))
                             endtick += self.interval
         for tickt in contents:
             contents[tickt].sort()
@@ -579,11 +584,12 @@ class Agenda:
             # print each event at the right output column
             content = ''
             prev_end = 0
-            for (_, initial, text) in contents[tickt]:
-                content += ' ' * (initial - prev_end)
-                content += text
-                prev_end = initial + blen(text)
-                did_first = True
+            for (col_index, initial, text) in contents[tickt]:
+                if col_index == 0:
+                    content += ' ' * (initial - prev_end)
+                    content += text
+                    prev_end = initial + blen(text)
+                    did_first = True
 
             # place the "now" arrow
             if is_todate and tick == nowtick:
@@ -982,9 +988,10 @@ def weekview(
             elif len(values) == 3:
                 i, initial, text = values
             if isinstance(text, str):
-                offset = calc_initial(i, initial)
-                text = bshorten(text, termsize.columns - offset)
-                row = place(text, offset, row)
+                if i < table_width:
+                    offset = calc_initial(i, initial)
+                    text = bshorten(text, termsize.columns - offset)
+                    row = place(text, offset, row)
         return row
 
     # assemble date headers
