@@ -1,13 +1,13 @@
 import json
 import pickle
 import re
-import socket
 import sqlite3
 import sys
 from collections import OrderedDict
 from datetime import date, datetime, time
 from datetime import timedelta as t
 from time import sleep
+from typing import cast
 from unittest.mock import MagicMock
 from unittest.mock import patch as mock_patch
 
@@ -27,7 +27,7 @@ def base_datetime(thedate, thetime=None):
 def as_date(date_or_datetime, endtime=False):
     if isinstance(date_or_datetime, datetime):
         return date_or_datetime.date()
-    return date_or_datetime - t(days=int(endtime))
+    return cast(date, date_or_datetime) - t(days=int(endtime))
 
 
 def as_datetime(date_or_datetime):
