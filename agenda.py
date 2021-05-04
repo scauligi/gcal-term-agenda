@@ -777,9 +777,9 @@ def fourweek(
     for evt in events:
         if no_recurring and evt.recurring:
             continue
-        start = as_datetime(evt.start)
-        cellnum = (start.date() - calstart).days
-        if cellnum in range(0, len(cells)):
+        cellnum = (as_date(evt.start) - calstart).days
+        cellend = (as_date(evt.end) - calstart).days
+        if (0 <= cellnum < len(cells)) or (0 < cellend <= len(cells)):
             if isinstance(evt.start, datetime):
                 text = ftime(evt.start) + ' ' + evt.summary
                 text = shorten(text, inner_width)
@@ -788,18 +788,19 @@ def fourweek(
             else:
                 # full-day event
                 # code copied from weekview, need to DRY
-                text = ' ' + evt.summary
                 start_week = cellnum // table_width
                 end_week = (cellnum + (evt.end - evt.start).days - 1) // table_width
                 for week in range(start_week, end_week + 1):
-                    weekstart = calstart + t(days=(week * table_width))
-                    incellnum = (max(evt.start, weekstart) - weekstart).days
-                    ndays = (
-                        min(evt.end, weekstart + t(days=table_width))
-                        - max(evt.start, weekstart)
-                    ).days
+                    text = ' ' + evt.summary
+                    week_start = calstart + t(days=(week * table_width))
+                    week_end = week_start + t(days=table_width)
+
+                    incellnum = (max(evt.start, week_start) - week_start).days
+                    excellnum = (min(evt.end, week_end) - week_start).days
+                    ndays = excellnum - incellnum
+
                     daycells = weekcells[week]
-                    subcells = daycells[incellnum : incellnum + ndays]
+                    subcells = daycells[incellnum:excellnum]
                     topslot = max(map(len, subcells))
                     for j in range(topslot):
                         if all(
@@ -811,12 +812,16 @@ def fourweek(
                     else:
                         j = topslot
 
-                    if evt.start < weekstart:
+                    if evt.start < week_start:
                         text = '┄' + text
 
                     if (evt.end - evt.start).days > 1:
                         outlen = ndays * (inner_width + 1) - 1
-                        text += ' ' + DASH * (outlen - len(evt.summary) - 3) + '>'
+                        text += (
+                            ' '
+                            + DASH * (outlen - len(text) - 2)
+                            + ('┄' if evt.end > week_end else '>')
+                        )
                     else:
                         text = shorten(text, inner_width)
 
@@ -836,10 +841,11 @@ def fourweek(
             daycell = daycells[j]
             cell, cell_recurring = cells[i * table_width + j]
             filled_cell = []
-            for text in daycell.values():
-                if text == OPEN:
+            for k in range(max(daycell.keys(), default=-1) + 1):
+                text = daycell[k]
+                if text is OPEN:
                     text = ' ' * inner_width
-                elif text == CLOSED:
+                elif text is CLOSED:
                     text = None
                 filled_cell.append(text)
             filled_cell.extend(cell)
