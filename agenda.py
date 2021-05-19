@@ -822,6 +822,7 @@ def fourweek(
                             + DASH * (outlen - len(text) - 2)
                             + ('┄' if evt.end > week_end else '>')
                         )
+                        text = shorten(text, outlen)
                     else:
                         text = shorten(text, inner_width)
 
