@@ -289,7 +289,7 @@ def get_events(obj, todate, ndays, callist, local_recurring=False):
                     and date(startdate) < date(?, "+" || ? || " days")
                  and not cancelled
                  and calendar in ({','.join("?"*len(callist))})
-                order by startdate, hastime, datetime(start)
+                order by startdate, hastime, datetime(start), datetime(end) desc
         """,
             (todate, todate, ndays, *callist),
         )
@@ -302,7 +302,7 @@ def get_events(obj, todate, ndays, callist, local_recurring=False):
                  and not cancelled
                  and calendar in ({','.join("?"*len(callist))})
                 group by root_id
-                order by startdate, hastime, datetime(start)
+                order by startdate, hastime, datetime(start), datetime(end) desc
         """,
             (todate, *callist),
         )
