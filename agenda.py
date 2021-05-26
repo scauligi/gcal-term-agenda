@@ -378,6 +378,8 @@ class Agenda:
             self.obj, todate, actual_ndays, self.callist, local_recurring=True
         )
 
+        self.longest_summary = max(len(evt.summary) for evt in events)
+
         for evt in events:
             # get column (1-indexed)
             # accounts for events that start before the first day
@@ -774,6 +776,22 @@ def fourweek(
         local_recurring=True,
     )
 
+    running_width = 0
+    ftime_len = len(ftime()) + 1
+    for evt in events:
+        # XXX do DRY with following loop
+        if no_recurring and evt.recurring:
+            continue
+        cellnum = (as_date(evt.start) - calstart).days
+        cellend = (as_date(evt.end) - calstart).days
+        if (0 <= cellnum < len(cells)) or (0 < cellend <= len(cells)):
+            length = len(evt.summary)
+            if isinstance(evt.start, datetime):
+                length += ftime_len
+            running_width = max(length, running_width)
+    if termsize.columns_auto:
+        inner_width = min(inner_width, running_width)
+
     for evt in events:
         if no_recurring and evt.recurring:
             continue
@@ -787,7 +805,7 @@ def fourweek(
                 cells[cellnum][choice(evt)].append(text)
             else:
                 # full-day event
-                # code copied from weekview, need to DRY
+                # XXX code copied from weekview, need to DRY
                 start_week = cellnum // table_width
                 end_week = (cellnum + (evt.end - evt.start).days - 1) // table_width
                 for week in range(start_week, end_week + 1):
@@ -958,6 +976,8 @@ def weekview(
     timecolsz = len(ftime()) + 1
     inner_width = (termsize.columns - timecolsz - (table_width + 1)) // table_width
     inner_width = max(inner_width, 0)
+    if termsize.columns_auto:
+        inner_width = min(agendamaker.longest_summary, inner_width)
 
     # full-day events part 1
     OPEN = object()
