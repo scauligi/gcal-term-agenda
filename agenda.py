@@ -378,7 +378,7 @@ class Agenda:
             self.obj, todate, actual_ndays, self.callist, local_recurring=True
         )
 
-        self.longest_summary = max(len(evt.summary) for evt in events)
+        self.longest_summary = max((len(evt.summary) for evt in events), default=0)
 
         for evt in events:
             # get column (1-indexed)
