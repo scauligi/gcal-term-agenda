@@ -1262,7 +1262,6 @@ def parse_args(argv, termsize, objs=None):
         metavar='N',
         nargs='?',
         const=4,
-        type=int,
         help='print an N-week diagram (default 4)',
     )
     parser.add_argument(
@@ -1280,7 +1279,6 @@ def parse_args(argv, termsize, objs=None):
         metavar='N',
         nargs='?',
         const=0,
-        type=int,
         help='print a multi-day view (of N days)',
     )
     parser.add_argument(
@@ -1295,6 +1293,20 @@ def parse_args(argv, termsize, objs=None):
     args, remain = parser.parse_known_args(argv)
     if remain:
         raise Exception('unrecognized arguments: {}'.format(' '.join(remain)))
+
+    if args.four_week is not None:
+        try:
+            args.four_week = int(args.four_week)
+        except ValueError:
+            args.date.insert(0, args.four_week)
+            args.four_week = 4
+
+    if args.week_view is not None:
+        try:
+            args.week_view = int(args.week_view)
+        except ValueError:
+            args.date.insert(0, args.week_view)
+            args.week_view = 0
 
     modes = 0
     modes += args.list_calendar
