@@ -798,6 +798,7 @@ def fourweek(
         cellnum = (as_date(evt.start) - calstart).days
         cellend = (as_date(evt.end) - calstart).days
         if (0 <= cellnum < len(cells)) or (0 < cellend <= len(cells)):
+            cellnum = max(0, cellnum)
             if isinstance(evt.start, datetime):
                 text = ftime(evt.start) + ' ' + evt.summary
                 text = shorten(text, inner_width)
