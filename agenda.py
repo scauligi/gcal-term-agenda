@@ -808,7 +808,7 @@ def fourweek(
                 # full-day event
                 # XXX code copied from weekview, need to DRY
                 start_week = cellnum // table_width
-                end_week = (cellnum + (evt.end - evt.start).days - 1) // table_width
+                end_week = ((evt.end - calstart).days - 1) // table_width
                 end_week = min(end_week, table_height - 1)
                 for week in range(start_week, end_week + 1):
                     text = ' ' + evt.summary
