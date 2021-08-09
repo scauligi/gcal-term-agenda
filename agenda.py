@@ -347,12 +347,14 @@ class Agenda:
             tzinfo=thetime.tzinfo,
         )
 
-    def agenda_table(self, todate, ndays=None, starttime=None, print_warning=True):
+    def agenda_table(
+        self, todate, ndays=None, min_start=None, max_start=None, print_warning=True
+    ):
         self.todate = todate
         self.has_later = False
 
-        if starttime is None:
-            starttime = time(tzinfo=tzlocal())
+        if min_start is None:
+            min_start = time(tzinfo=tzlocal())
 
         # table[0] is the time column
         # table[n] is the event column for day n
@@ -395,7 +397,8 @@ class Agenda:
             if startindex >= 0:
                 tickt = self.quantize(evt.start).time()
             else:
-                tickt = starttime
+                tickt = min_start
+            tickt = max(min_start, tickt)
             table[0][tickt] = tickt
             table[index][tickt].append(evt)
 
@@ -409,6 +412,8 @@ class Agenda:
         tickt = time()
         if start_min:
             tickt = min(min(col.keys(), default=time()) for col in cols)
+            if isinstance(start_min, time):
+                tickt = min(start_min, tickt)
             minutes = tickt.hour * 60 + tickt.minute
         while tickt <= max(max(col.keys(), default=time()) for col in cols):
             yield tickt
@@ -949,7 +954,8 @@ def weekview(
     dark_recurring=False,
     zero_offset=False,
     interval=None,
-    starttime=None,
+    min_start=None,
+    max_start=None,
 ):
     table_width = week_ndays if week_ndays > 0 else 7
     interval = interval or 30
@@ -965,11 +971,18 @@ def weekview(
     agendamaker = Agenda(
         calendars, objs=objs, dark_recurring=dark_recurring, interval=interval
     )
-    if starttime is not None:
-        starttime = time(starttime, tzinfo=tzlocal())
+    if min_start is not None:
+        min_start = time(min_start, tzinfo=tzlocal())
+    if max_start is not None:
+        max_start = time(max_start, tzinfo=tzlocal())
     timecol, *evtcols = agendamaker.agenda_table(
-        weekstart, ndays=table_width, starttime=starttime
+        weekstart,
+        ndays=table_width,
+        min_start=min_start,
+        max_start=max_start,
     )
+    if max_start is not None:
+        timecol[max_start] = max_start
 
     todate_offset = (agendamaker.now.date() - weekstart).days
     has_todate = 0 <= todate_offset < week_ndays
@@ -1045,7 +1058,7 @@ def weekview(
         if row is None:
             row = do_row(tickt, ' ', PIPE)
             if not isinstance(tickt, str) and tickt:
-                max_index = max(final_i[tickt])
+                max_index = max(final_i[tickt], default=-1)
                 fill = DGRAY + DASH * inner_width + RESET
                 for i in range(max_index):
                     row = place(fill, calc_initial(i, 0), row)
@@ -1103,7 +1116,9 @@ def weekview(
 
     # assemble timeblocks
     newtable.append(do_row(DASH, DASH, CORNERS[1][1], *CORNERS[1][1:]))
-    for tickt in agendamaker._intervals(contents, start_min=True):
+    for tickt in agendamaker._intervals(
+        contents, start_min=(True if max_start is None else max_start)
+    ):
         row = None
         if has_todate and tickt == nowtick:
             nowtime = ftime(agendamaker.now, now=True).strip()
@@ -1207,6 +1222,14 @@ def parse_args(args=None):
     )
     parser.add_argument(
         '-s',
+        '--min-start',
+        metavar='N',
+        action='store',
+        type=int,
+        help="start the week's day not before this time",
+    )
+    parser.add_argument(
+        '-S',
         '--start-time',
         metavar='N',
         action='store',
@@ -1313,6 +1336,12 @@ def parse_args(args=None):
             objs=objs,
         )
     elif args.week_view is not None:
+        if args.start_time is not None:
+            if args.min_start is None:
+                args.min_start = args.start_time
+            else:
+                raise Exception("can't specify both min start and start time")
+
         table = weekview(
             aday,
             args.week_view,
@@ -1321,7 +1350,8 @@ def parse_args(args=None):
             dark_recurring=args.no_recurring,
             zero_offset=args.zero_offset,
             interval=args.interval,
-            starttime=args.start_time,
+            min_start=args.min_start,
+            max_start=args.start_time,
             objs=objs,
         )
     else:
