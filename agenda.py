@@ -380,7 +380,15 @@ class Agenda:
             self.obj, todate, actual_ndays, self.callist, local_recurring=True
         )
 
-        self.longest_summary = max((len(evt.summary) for evt in events), default=0)
+        longest_fullday_summary = max(
+            (len(evt.summary) for evt in events if not isinstance(evt.start, datetime)),
+            default=0,
+        )
+        longest_timeblock_summary = max(
+            (len(evt.summary) for evt in events if isinstance(evt.start, datetime)),
+            default=0,
+        )
+        self.longest_summary = (longest_fullday_summary, longest_timeblock_summary)
 
         for evt in events:
             # get column (1-indexed)
@@ -993,7 +1001,8 @@ def weekview(
     inner_width = (termsize.columns - timecolsz - (table_width + 1)) // table_width
     inner_width = max(inner_width, 0)
     if termsize.columns_auto:
-        inner_width = min(agendamaker.longest_summary, inner_width)
+        longest_summary = max(agendamaker.longest_summary[0] + 2, agendamaker.longest_summary[1])
+        inner_width = min(longest_summary, inner_width)
 
     # full-day events part 1
     OPEN = object()
