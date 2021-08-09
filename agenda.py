@@ -347,14 +347,14 @@ class Agenda:
             tzinfo=thetime.tzinfo,
         )
 
-    def agenda_table(
-        self, todate, ndays=None, min_start=None, max_start=None, print_warning=True
-    ):
+    def agenda_table(self, todate, ndays=None, min_start=None, print_warning=True):
         self.todate = todate
         self.has_later = False
 
         if min_start is None:
             min_start = time(tzinfo=tzlocal())
+        else:
+            min_start = self.quantize(datetime.combine(todate, min_start)).time()
 
         # table[0] is the time column
         # table[n] is the event column for day n
@@ -399,8 +399,9 @@ class Agenda:
             else:
                 tickt = min_start
             tickt = max(min_start, tickt)
-            table[0][tickt] = tickt
-            table[index][tickt].append(evt)
+            if evt.end.time() > min_start or evt.end.date() > evt.start.date():
+                table[0][tickt] = tickt
+                table[index][tickt].append(evt)
 
         return table
 
@@ -972,16 +973,16 @@ def weekview(
         calendars, objs=objs, dark_recurring=dark_recurring, interval=interval
     )
     if min_start is not None:
-        min_start = time(min_start, tzinfo=tzlocal())
+        min_start = time(*min_start, tzinfo=tzlocal())
     if max_start is not None:
-        max_start = time(max_start, tzinfo=tzlocal())
+        max_start = time(*max_start, tzinfo=tzlocal())
     timecol, *evtcols = agendamaker.agenda_table(
         weekstart,
         ndays=table_width,
         min_start=min_start,
-        max_start=max_start,
     )
     if max_start is not None:
+        max_start = agendamaker.quantize(datetime.combine(weekstart, max_start)).time()
         timecol[max_start] = max_start
 
     todate_offset = (agendamaker.now.date() - weekstart).days
@@ -1225,7 +1226,6 @@ def parse_args(args=None):
         '--min-start',
         metavar='N',
         action='store',
-        type=int,
         help="start the week's day not before this time",
     )
     parser.add_argument(
@@ -1233,7 +1233,6 @@ def parse_args(args=None):
         '--start-time',
         metavar='N',
         action='store',
-        type=int,
         help="start the week's day at this time",
     )
     parser.add_argument('date', nargs='*', help='use this date instead of today')
@@ -1337,10 +1336,13 @@ def parse_args(args=None):
         )
     elif args.week_view is not None:
         if args.start_time is not None:
+            args.start_time = tuple(map(int, args.start_time.split(':')))
             if args.min_start is None:
                 args.min_start = args.start_time
             else:
                 raise Exception("can't specify both min start and start time")
+        if isinstance(args.min_start, str):
+            args.min_start = map(int, args.min_start.split(':'))
 
         table = weekview(
             aday,
