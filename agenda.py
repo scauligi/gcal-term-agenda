@@ -2,7 +2,6 @@
 
 import argparse
 import calendar
-import contextlib
 import os
 import pickle
 import re
@@ -98,6 +97,7 @@ def bshorten(text, max_width):
     text = text.rstrip()
     textlen = blen(text)
     if textlen > max_width:
+        lastchar = None
         tokens = tokenize(text)
         while tokens and textlen > max_width - 1:
             if not (lastchar := tokens.pop()).startswith('\033'):
@@ -316,7 +316,7 @@ def get_events(obj, todate, ndays, callist, local_recurring=False):
 
 
 class Agenda:
-    def __init__(self, calendars, objs=None, dark_recurring=False, interval=None):
+    def __init__(self, calendars, objs, dark_recurring=False, interval=None):
         self.now = datetime.now(tzlocal())
         self.obj, evt2short = objs
 
@@ -1132,108 +1132,30 @@ def load_evts(*args, **kwargs):
     return obj, evt2short
 
 
-SOCK = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'unix_sock')
-import asyncio
-import signal
-import traceback
-
-from async_utils import read_pickled, write_pickled
-
-
-def server():
-    if os.path.exists(SOCK):
-        # not a race since we check again later
-        raise Exception(SOCK + ' already exists')
-    obj_lock = None
-    dl_queue = None
-    objs = load_evts(print_warning=True)
-    db = objs[0]['db']
-
-    async def do_download():
-        nonlocal objs
-        nonlocal obj_lock
-        while await dl_queue.get():
-            try:
-                print(datetime.now(), 'downloading...')
-                new_obj = gcal.download_evts(in_loop=True)
-                async with obj_lock:
-                    obj = new_obj
-                    obj['db'] = db
-                    evt2short = make_evt2short(obj)
-                    objs = (obj, evt2short)
-                print(datetime.now(), 'loaded ok')
-            except Exception:
-                print('EXCEPTION: do_download:')
-                traceback.print_exc()
-        print('INFO: do_download stopped')
-
-    async def download_loop():
-        nonlocal dl_queue
-        while True:
-            await dl_queue.put(True)
-            await asyncio.sleep(15 * 60)
-
-    async def handle_connection(reader, writer):
-        nonlocal objs
-        nonlocal obj_lock
-        argv, termsize = await read_pickled(reader)
-        print(datetime.now(), 'serving client:', argv)
-        try:
-            async with obj_lock:
-                table = parse_args(argv, termsize, objs=objs)
-        except Exception as e:
-            table = [str(e)]
-        write_pickled(writer, table)
-        await writer.drain()
-        writer.close()
-        await writer.wait_closed()
-
-    async def start_server():
-        nonlocal obj_lock
-        nonlocal dl_queue
-
-        obj_lock = asyncio.Lock()
-        dl_queue = asyncio.Queue()
-        asyncio.create_task(do_download())
-        asyncio.create_task(download_loop())
-
-        if os.path.exists(SOCK):
-            # XXX could race
-            raise Exception(SOCK + ' already exists')
-        server = await asyncio.start_unix_server(handle_connection, SOCK)
-        # XXX could race
-        signal.signal(signal.SIGINT, cleanup)
-        signal.signal(signal.SIGTERM, cleanup)
-
-        try:
-            async with server:
-                await server.serve_forever()
-        finally:
-            cleanup()
-
-    def cleanup(_signum=None, _frame=None):
-        with contextlib.suppress(FileNotFoundError):
-            os.remove(SOCK)
-        exit(1)
-
-    asyncio.run(start_server())
-
-
-def client(argv, termsize):
-    async def do_client():
-        reader, writer = await asyncio.open_unix_connection(SOCK)
-        write_pickled(writer, (argv, termsize))
-        await writer.drain()
-        table = await read_pickled(reader)
-        writer.close()
-        await writer.wait_closed()
-        return table
-
-    return asyncio.run(do_client())
-
-
-def parse_args(argv, termsize, objs=None):
+def parse_args(args=None):
     parser = argparse.ArgumentParser(exit_on_error=False)
+    parser.add_argument(
+        '-4', '--force-ipv4', action='store_true', help="force IPv4 sockets"
+    )
+    parser.add_argument(
+        '-d',
+        '--download-only',
+        action='store_true',
+        help="don't print anything, just refresh the calendar cache",
+    )
+    parser.add_argument(
+        '-D',
+        '--download-cal',
+        action='store',
+        metavar='ID',
+        help="don't print anything, just download the named calendar",
+    )
+    parser.add_argument(
+        '-W', '--width', action='store', type=int, help='set terminal width'
+    )
+    parser.add_argument(
+        '-H', '--height', action='store', type=int, help='set terminal height'
+    )
     parser.add_argument(
         '-c',
         '--calendar',
@@ -1292,9 +1214,36 @@ def parse_args(argv, termsize, objs=None):
         help="start the week's day at this time",
     )
     parser.add_argument('date', nargs='*', help='use this date instead of today')
-    args, remain = parser.parse_known_args(argv)
+    args, remain = parser.parse_known_args(args)
     if remain:
         raise Exception('unrecognized arguments: {}'.format(' '.join(remain)))
+
+    if args.force_ipv4:
+        ipv4_monkey_patch()
+
+    if args.download_only:
+        gcal.download_evts()
+        print('loaded ok:', datetime.now())
+        exit(0)
+    elif args.download_cal:
+        gcal.download_evts(args.download_cal)
+        print('loaded ok:', datetime.now())
+        exit(0)
+
+    termsize = TerminalSize(args.width, args.height, False, False)
+    if termsize[0] is None or termsize[1] is None:
+        try:
+            term_dimensions = os.get_terminal_size()
+            if termsize.columns is None:
+                termsize = termsize._replace(
+                    columns=term_dimensions.columns, columns_auto=True
+                )
+            if termsize.lines is None:
+                termsize = termsize._replace(
+                    lines=term_dimensions.lines - 1, lines_auto=True
+                )
+        except OSError:
+            pass
 
     if args.four_week is not None:
         try:
@@ -1328,8 +1277,7 @@ def parse_args(argv, termsize, objs=None):
         aday = date.today()
         forced = False
 
-    if objs is None:
-        objs = load_evts()
+    objs = load_evts()
 
     if args.list_calendar:
         table = listcal(
@@ -1387,70 +1335,6 @@ def parse_args(argv, termsize, objs=None):
     return table
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '-4', '--force-ipv4', action='store_true', help="force IPv4 sockets"
-    )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        '-d',
-        '--download-only',
-        action='store_true',
-        help="don't print anything, just refresh the calendar cache",
-    )
-    group.add_argument(
-        '-D',
-        '--download-cal',
-        action='store',
-        metavar='ID',
-        help="don't print anything, just download the named calendar",
-    )
-    group.add_argument('--server', action='store_true', help="start server")
-    group.add_argument('--client', action='store_true', help="run as client")
-    parser.add_argument(
-        '-W', '--width', action='store', type=int, help='set terminal width'
-    )
-    parser.add_argument(
-        '-H', '--height', action='store', type=int, help='set terminal height'
-    )
-    args, remainder = parser.parse_known_args()
-
-    termsize = TerminalSize(args.width, args.height, False, False)
-    if termsize[0] is None or termsize[1] is None:
-        try:
-            term_dimensions = os.get_terminal_size()
-            if termsize.columns is None:
-                termsize = termsize._replace(
-                    columns=term_dimensions.columns, columns_auto=True
-                )
-            if termsize.lines is None:
-                termsize = termsize._replace(
-                    lines=term_dimensions.lines - 1, lines_auto=True
-                )
-        except OSError:
-            pass
-
-    if args.force_ipv4:
-        ipv4_monkey_patch()
-
-    if args.download_only:
-        gcal.download_evts()
-        print('loaded ok:', datetime.now())
-        exit(0)
-    elif args.download_cal:
-        gcal.download_evts(args.download_cal)
-        print('loaded ok:', datetime.now())
-        exit(0)
-    elif args.server:
-        server()
-        exit(0)
-    elif args.client:
-        return client(remainder, termsize)
-    else:
-        return parse_args(remainder, termsize)
-
-
 if __name__ == '__main__':
-    table = main()
+    table = parse_args()
     Agenda.print_table(table)
