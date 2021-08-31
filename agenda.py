@@ -1001,7 +1001,9 @@ def weekview(
     inner_width = (termsize.columns - timecolsz - (table_width + 1)) // table_width
     inner_width = max(inner_width, 0)
     if termsize.columns_auto:
-        longest_summary = max(agendamaker.longest_summary[0] + 2, agendamaker.longest_summary[1])
+        longest_summary = max(
+            agendamaker.longest_summary[0] + 2, agendamaker.longest_summary[1]
+        )
         inner_width = min(longest_summary, inner_width)
 
     # full-day events part 1
