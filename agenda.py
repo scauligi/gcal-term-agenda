@@ -262,7 +262,7 @@ def make_evt2short(obj):
         code = cal['backgroundColor']
         rgb = [int(code[x : x + 2], 16) for x in (1, 3, 5)]
         v = max(rgb)
-        new_v = max(v - 70, 0)
+        new_v = min(max(v - 70, 0), 127)
         scaling = new_v / v
         dark_rgb = [round(x * scaling) for x in rgb]
         cal2short[cal['id']] = tuple(rgb)
