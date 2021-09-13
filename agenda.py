@@ -998,13 +998,17 @@ def weekview(
     nowtick = agendamaker.quantize(agendamaker.now).time()
 
     timecolsz = len(ftime()) + 1
-    inner_width = (termsize.columns - timecolsz - (table_width + 1)) // table_width
-    inner_width = max(inner_width, 0)
-    if termsize.columns_auto:
-        longest_summary = max(
-            agendamaker.longest_summary[0] + 2, agendamaker.longest_summary[1]
-        )
-        inner_width = min(longest_summary, inner_width)
+    longest_summary = max(
+        agendamaker.longest_summary[0] + 2, agendamaker.longest_summary[1]
+    )
+    if termsize.columns is None:
+        inner_width = longest_summary
+    else:
+        inner_width = (termsize.columns - timecolsz - 1) // table_width - 1
+        inner_width = max(inner_width, 0)
+        if termsize.columns_auto:
+            inner_width = min(longest_summary, inner_width)
+    outer_width = (inner_width + 1) * table_width + 1 + timecolsz
 
     # full-day events part 1
     OPEN = object()
@@ -1103,7 +1107,7 @@ def weekview(
             if isinstance(text, str):
                 if i < table_width:
                     offset = calc_initial(i, initial)
-                    text = bshorten(text, termsize.columns - offset)
+                    text = bshorten(text, outer_width - offset)
                     row = place(text, offset, row)
         return row
 
