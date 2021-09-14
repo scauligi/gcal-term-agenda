@@ -728,9 +728,6 @@ def fourweek(
 ):
     table_width = 7
 
-    inner_width = (termsize.columns - (table_width + 1)) // table_width
-    inner_height = (termsize.lines - (table_height + 1)) // table_height
-
     table = []
 
     offset = todate.isoweekday() % 7
@@ -803,8 +800,13 @@ def fourweek(
             if isinstance(evt.start, datetime):
                 length += ftime_len
             running_width = max(length, running_width)
-    if termsize.columns_auto:
-        inner_width = min(inner_width, running_width)
+    if termsize.columns is None:
+        inner_width = running_width
+    else:
+        inner_width = (termsize.columns - (table_width + 1)) // table_width
+        inner_width = max(inner_width, 0)
+        if termsize.columns_auto:
+            inner_width = min(inner_width, running_width)
 
     for evt in events:
         if no_recurring and evt.recurring:
@@ -890,8 +892,13 @@ def fourweek(
             filled_cells.append(filled_cell)
 
     max_inner_height = max(len(cell) for cell in filled_cells) + 2
-    if termsize.lines_auto:
-        inner_height = min(inner_height, max_inner_height)
+    if termsize.lines is None:
+        inner_height = max_inner_height
+    else:
+        inner_height = (termsize.lines - (table_height + 1)) // table_height
+        inner_height = max(inner_height, 0)
+        if termsize.lines_auto:
+            inner_height = min(inner_height, max_inner_height)
 
     # set up table borders
     table.append(do_row(DASH, *CORNERS[0]))
