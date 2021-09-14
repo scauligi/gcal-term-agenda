@@ -60,6 +60,8 @@ def fg(short):
 
 
 LGRAY = fg(250)
+MLGRAY = fg(243)
+MMLGRAY = fg(240)
 MGRAY = fg(237)
 DGRAY = fg(235)
 NOWLINE_COLOR = fg(66)
@@ -736,6 +738,7 @@ def fourweek(
         rev_offset = (7 - offset) % 7
         offset = 0
 
+    linecolor = MMLGRAY if not no_recurring else MGRAY
     def do_row(fill, left, mid=None, right=None, thick=None):
         if mid is None:
             mid = left
@@ -750,7 +753,7 @@ def fourweek(
             index = rev_offset * (inner_width + 1)
             line = line[:index] + thick + line[index + 1 :]
         line = line[:-1] + right
-        return LGRAY + line + RESET
+        return linecolor + line + RESET
 
     obj, _evt2short = objs
     now = datetime.now(tzlocal())
@@ -913,13 +916,14 @@ def fourweek(
     for i in range(table_height):
         for j in range(table_width):
             cell = filled_cells[i * table_width + j]
+            has_events = cells[i * table_width + j][0] or any(slot is not CLOSED for slot in weekcells[i][j].values())
             for k in range(inner_height):
                 lineIndex = i * (inner_height + 1) + k + 1
                 text = ' ' * inner_width
                 if k == 0:
                     celldate = todate + t(days=(i * table_width + j - offset))
                     datetext = dtime(celldate)
-                    dcolor = LGRAY
+                    dcolor = LGRAY if has_events else MLGRAY if weekcells[i][j] else MGRAY
                     if celldate == now.date():
                         datetext = f'> {datetext} <'
                         dcolor = WBOLD
@@ -929,7 +933,7 @@ def fourweek(
                         + RESET
                     )
                 elif k == 1:
-                    text = LGRAY + DASH * inner_width + RESET
+                    text = linecolor + DASH * inner_width + RESET
                 else:
                     k -= 2
                     if k + 2 == inner_height - 1 and len(cell) > k + 1:
@@ -948,11 +952,11 @@ def fourweek(
             for i, segment in enumerate(line):
                 if segment is not None:
                     if rev_offset and rev_offset == i:
-                        text += LGRAY + THICK + RESET
+                        text += linecolor + THICK + RESET
                     else:
-                        text += LGRAY + PIPE + RESET
+                        text += linecolor + PIPE + RESET
                     text += segment
-            text += LGRAY + PIPE + RESET
+            text += linecolor + PIPE + RESET
             newtable.append(text)
         else:
             newtable.append(line)
