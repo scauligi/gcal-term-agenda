@@ -726,6 +726,7 @@ def fourweek(
     objs=None,
     zero_offset=False,
     table_height=4,
+    table_cells=None,
     no_recurring=False,
 ):
     table_width = 7
@@ -733,26 +734,52 @@ def fourweek(
     table = []
 
     offset = todate.isoweekday() % 7
-    rev_offset = 0
+    thick_index = 0
     if zero_offset:
-        rev_offset = (7 - offset) % 7
+        thick_index = (7 - offset) % 7
         offset = 0
 
+    roffset = 0
+    if table_cells is not None:
+        table_height = (table_cells + offset + 6) // 7
+        roffset = 7 - ((table_width * table_height) - (offset + table_cells))
+
     linecolor = MMLGRAY if not no_recurring else MGRAY
-    def do_row(fill, left, mid=None, right=None, thick=None):
-        if mid is None:
-            mid = left
-        if right is None:
-            right = left
-        if thick is None:
-            thick = mid
-        line = left
-        for _ in range(table_width):
-            line += fill * inner_width + mid
-        if rev_offset:
-            index = rev_offset * (inner_width + 1)
-            line = line[:index] + thick + line[index + 1 :]
+
+    def do_row(i):
+        fill = DASH
+        corner_index = 0 if i == 0 else 2 if i == table_height else 1
+
+        start = 0
+        flip = -1
+        end = table_width
+
+        if table_cells and offset:
+            if i == 0:
+                start = offset
+            elif i == 1:
+                corner_index = 0
+                flip = offset
+                flip_index = 1
+        if roffset:
+            if i == table_height - 1:
+                flip = roffset + 1
+                flip_index = 2
+            elif i == table_height:
+                end = roffset
+
+        left, mid, right, thick = CORNERS[corner_index]
+
+        line = " " * start * (inner_width + 1)
+
+        line += left
+        for j in range(start + 1, end + 1):
+            if j == flip:
+                left, mid, right, thick = CORNERS[flip_index]
+            line += fill * inner_width
+            line += thick if thick_index and thick_index == j else mid
         line = line[:-1] + right
+
         return linecolor + line + RESET
 
     obj, _evt2short = objs
@@ -760,7 +787,12 @@ def fourweek(
     nowdate = now.date()
 
     def evt2short(evt):
-        if as_date(evt.start) > as_date(now):
+        if table_cells and (
+            as_date(evt.end) < todate
+            or as_date(evt.start) >= todate + t(days=table_cells)
+        ):
+            dark = True
+        elif as_date(evt.start) > as_date(now):
             dark = evt.recurring
         else:
             dark = as_datetime(evt.end) <= now
@@ -904,26 +936,41 @@ def fourweek(
             inner_height = min(inner_height, max_inner_height)
 
     # set up table borders
-    table.append(do_row(DASH, *CORNERS[0]))
-    for _ in range(table_height):
+    line = do_row(0)
+    table.append(line)
+    for i in range(1, table_height + 1):
         for _ in range(inner_height):
             table.append([])
-        table.append(do_row(DASH, *CORNERS[1]))
-    table.pop()
-    table.append(do_row(DASH, *CORNERS[2]))
+        line = do_row(i)
+        table.append(line)
 
     # overwrite table with content of cells
     for i in range(table_height):
         for j in range(table_width):
             cell = filled_cells[i * table_width + j]
-            has_events = cells[i * table_width + j][0] or any(slot is not CLOSED for slot in weekcells[i][j].values())
+            has_events = cells[i * table_width + j][0] or any(
+                slot is not CLOSED for slot in weekcells[i][j].values()
+            )
             for k in range(inner_height):
                 lineIndex = i * (inner_height + 1) + k + 1
                 text = ' ' * inner_width
                 if k == 0:
                     celldate = todate + t(days=(i * table_width + j - offset))
                     datetext = dtime(celldate)
-                    dcolor = LGRAY if has_events else MLGRAY if weekcells[i][j] else MGRAY
+                    dcolor = (
+                        MGRAY
+                        if table_cells
+                        and (
+                            i == 0
+                            and j < offset
+                            or (i == table_height - 1 and j >= roffset)
+                        )
+                        else LGRAY
+                        if has_events
+                        else MLGRAY
+                        if weekcells[i][j]
+                        else MGRAY
+                    )
                     if celldate == now.date():
                         datetext = f'> {datetext} <'
                         dcolor = WBOLD
@@ -946,17 +993,32 @@ def fourweek(
                 table[lineIndex].append(text)
 
     newtable = []
-    for line in table:
+    for i, line in enumerate(table):
+        topline = 2
+        top = inner_height
+        botline = len(table) - inner_height
+        bottom = botline - 2
         if isinstance(line, list):
-            text = ''
-            for i, segment in enumerate(line):
+            text = ""
+            for j, segment in enumerate(line):
+                left = j < offset
+                right = j > roffset
+
+                pipe = PIPE
+                if table_cells:
+                    if (i <= top and left) or (i > bottom and right):
+                        pipe = " "
+                    elif thick_index and thick_index == j:
+                        pipe = THICK
+                    if (i == topline and left) or (i == botline and j > roffset - 1):
+                        segment = " " * inner_width
+
                 if segment is not None:
-                    if rev_offset and rev_offset == i:
-                        text += linecolor + THICK + RESET
-                    else:
-                        text += linecolor + PIPE + RESET
+                    text += linecolor + pipe + RESET
                     text += segment
-            text += linecolor + PIPE + RESET
+
+            pipe = " " if table_cells and i > bottom else PIPE
+            text += linecolor + pipe + RESET
             newtable.append(text)
         else:
             newtable.append(line)
@@ -1347,16 +1409,13 @@ def parse_args(args=None):
         )
     elif args.month_view:
         aday = date(aday.year, aday.month, 1)
-        firstweekday = aday.weekday() if args.zero_offset else calendar.SUNDAY
-        nweeks = len(
-            calendar.Calendar(firstweekday).monthdayscalendar(aday.year, aday.month)
-        )
+        ncells = calendar.monthrange(aday.year, aday.month)[1]
         table = fourweek(
             aday,
             args.calendar,
             termsize=termsize,
             zero_offset=args.zero_offset,
-            table_height=nweeks,
+            table_cells=ncells,
             no_recurring=args.no_recurring,
             objs=objs,
         )
