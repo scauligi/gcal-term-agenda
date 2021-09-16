@@ -96,10 +96,15 @@ async def repaint():
         moretext = term.move_yx(term.height - 1, start) + term.dodgerblue4 + moretext
         lines[-1] += moretext
 
-    print(term.home, term.normal, term.clear, sep='', end='')
-    for i, line in enumerate(lines):
-        print(term.move_yx(i, 0), line, sep='', end='')
-    print(end='', flush=True)
+    # lines = [line + term.clear_eol for line in lines]
+
+    print(term.home, term.normal, sep='', end='')
+    if chop_long_lines:
+        for i, line in enumerate(lines):
+            print(term.move_yx(i, 0), line, sep='', end='')
+    else:
+        print((term.clear_eol + '\n').join(lines), end='')
+    print(term.clear_eos, end='', flush=True)
 
 
 async def timer(args):
