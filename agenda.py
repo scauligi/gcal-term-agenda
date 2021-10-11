@@ -1299,6 +1299,14 @@ def parse_args(args=None):
         help='print an N-week diagram (default 4)',
     )
     parser.add_argument(
+        '-X',
+        '--custom-days',
+        metavar='N',
+        action='store',
+        type=int,
+        help='print an N-day diagram',
+    )
+    parser.add_argument(
         '-m', '--month-view', action='store_true', help='print a month diagram'
     )
     parser.add_argument(
@@ -1412,6 +1420,16 @@ def parse_args(args=None):
             termsize=termsize,
             zero_offset=args.zero_offset,
             table_height=args.four_week,
+            no_recurring=args.no_recurring,
+            objs=objs,
+        )
+    elif args.custom_days is not None:
+        table = fourweek(
+            aday,
+            args.calendar,
+            termsize=termsize,
+            zero_offset=args.zero_offset,
+            table_cells=args.custom_days,
             no_recurring=args.no_recurring,
             objs=objs,
         )
