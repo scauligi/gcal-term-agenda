@@ -1268,6 +1268,12 @@ def parse_args(args=None):
         help='restrict to specified calendar(s)',
     )
     parser.add_argument(
+        '-C',
+        '--list-known-calendars',
+        action='store_true',
+        help='list all known calendars',
+    )
+    parser.add_argument(
         '-i',
         '--interval',
         metavar='MINUTES',
@@ -1389,7 +1395,9 @@ def parse_args(args=None):
 
     objs = load_evts()
 
-    if args.list_calendar:
+    if args.list_known_calendars:
+        table = [f"{key}\t{value}" for key, value in gcal.get_visible_cals(objs[0]['calendars']).items()]
+    elif args.list_calendar:
         table = listcal(
             aday,
             args.calendar,
