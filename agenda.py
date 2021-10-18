@@ -204,10 +204,13 @@ def ftime(dt=None, now=False):
     return s
 
 
-def tdtime(td):
+def tdtime(td, prefer_hours=False):
     days = td.days
     minutes = td.seconds // 60
     hours, minutes = divmod(minutes, 60)
+    if prefer_hours and (hours or minutes):
+        hours += 24 * days
+        days = 0
     s = ''
     if days:
         s += str(days) + ' day'
@@ -675,6 +678,9 @@ def listcal(todate, calendars, no_recurring=False, forced=False, objs=None):
         (nextmonth, '== NEXT MONTH =='),
         (follmonth, '== THE FUTURE =='),
     ]
+    if forced:
+        highwater[1] = (today, f'== {today.strftime("%b %d").upper()} ==')
+        del highwater[2:]
 
     events = get_events(
         obj, todate, 1 if forced else -1, callist, local_recurring=forced
@@ -703,7 +709,11 @@ def listcal(todate, calendars, no_recurring=False, forced=False, objs=None):
         fmt += ' '
         fmt += fg(evt2short(evt, dark=dark)) + evt.summary + RESET
         fmt += ' '
-        fmt += white + tdtime(evt.end - evt.start).replace('1 day', '') + RESET
+        fmt += (
+            white
+            + re.sub(r'^1 day$', r'', tdtime(evt.end - evt.start, prefer_hours=True))
+            + RESET
+        )
         table.append(fmt)
     return table
 
