@@ -760,36 +760,36 @@ def fourweek(
         fill = DASH
         corner_index = 0 if i == 0 else 2 if i == table_height else 1
 
-        start = 0
-        flip = -1
-        end = table_width
+        flips = [[0, corner_index], [table_width + 1, -1]]
 
         if table_cells and offset:
-            if i == 0:
-                start = offset
+            if i == 0 or i == 1 == table_height:
+                flips[0][0] = offset
             elif i == 1:
-                corner_index = 0
-                flip = offset
-                flip_index = 1
+                flips[0][1] = 0
+                flips.append([offset, 1])
         if roffset:
-            if i == table_height - 1:
-                flip = roffset + 1
-                flip_index = 2
-            elif i == table_height:
-                end = roffset
+            if i == table_height or i == table_height - 1 == 0:
+                flips.append([roffset + 1, -1])
+            elif i == table_height - 1:
+                flips.append([roffset + 1, 2])
 
-        left, mid, right, thick = CORNERS[corner_index]
+        flips.sort()
 
+        start, index = flips.pop(0)
         line = " " * start * (inner_width + 1)
-
+        left, mid, right, thick = CORNERS[index]
         line += left
-        for j in range(start + 1, end + 1):
-            if j == flip:
-                left, mid, right, thick = CORNERS[flip_index]
-            line += fill * inner_width
-            line += thick if thick_index and thick_index == j else mid
+        for end, index in flips:
+            end -= 1
+            for j in range(start, end):
+                line += fill * inner_width
+                line += thick if thick_index and thick_index == j else mid
+            start = end
+            if index < 0:
+                break
+            left, mid, right, thick = CORNERS[index]
         line = line[:-1] + right
-
         return linecolor + line + RESET
 
     obj, _evt2short = objs
