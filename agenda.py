@@ -840,7 +840,9 @@ def fourweek(
             continue
         cellnum = (as_date(evt.start) - calstart).days
         cellend = (as_date(evt.end) - calstart).days
-        if (0 <= cellnum < len(cells)) or (0 < cellend <= len(cells)):
+        if not isinstance(evt.end, datetime):
+            cellend -= 1
+        if cellnum < len(cells) and cellend >= 0:
             length = len(evt.summary)
             if isinstance(evt.start, datetime):
                 length += ftime_len
@@ -858,7 +860,9 @@ def fourweek(
             continue
         cellnum = (as_date(evt.start) - calstart).days
         cellend = (as_date(evt.end) - calstart).days
-        if (0 <= cellnum < len(cells)) or (0 < cellend <= len(cells)):
+        if not isinstance(evt.end, datetime):
+            cellend -= 1
+        if cellnum < len(cells) and cellend >= 0:
             cellnum = max(0, cellnum)
             if isinstance(evt.start, datetime):
                 text = ftime(evt.start) + ' ' + evt.summary
