@@ -135,7 +135,7 @@ def fromdateobj(o):
     if 'date' in o:
         return dateparse(o['date']).date()
     elif 'dateTime' in o:
-        return dateparse(o['dateTime'])
+        return dateparse(o['dateTime']).astimezone(tzl)
     else:
         raise Exception()
 
