@@ -743,16 +743,16 @@ def fourweek(
 
     table = []
 
-    offset = todate.isoweekday() % 7
+    offset = todate.isoweekday() % table_width
     thick_index = 0
     if zero_offset:
-        thick_index = (7 - offset) % 7
+        thick_index = (table_width - offset) % table_width
         offset = 0
 
     roffset = 0
     if table_cells is not None:
-        table_height = (table_cells + offset + 6) // 7
-        roffset = 7 - ((table_width * table_height) - (offset + table_cells))
+        table_height = (table_cells + offset + (table_width - 1)) // table_width
+        roffset = table_width - ((table_width * table_height) - (offset + table_cells))
 
     linecolor = MMLGRAY if not no_recurring else MGRAY
 
