@@ -1414,7 +1414,10 @@ def parse_args(args=None):
     objs = load_evts()
 
     if args.list_known_calendars:
-        table = [f"{key}\t{value}" for key, value in gcal.get_visible_cals(objs[0]['calendars']).items()]
+        table = [
+            f"{key}\t{value}"
+            for key, value in gcal.get_visible_cals(objs[0]['calendars']).items()
+        ]
     elif args.list_calendar:
         table = listcal(
             aday,
