@@ -99,7 +99,7 @@ async def repaint():
     # lines = [line + term.clear_eol for line in lines]
 
     print(term.home, term.normal, sep='', end='')
-    if chop_long_lines:
+    if False and chop_long_lines:
         for i, line in enumerate(lines):
             print(term.move_yx(i, 0), line, sep='', end='')
     else:

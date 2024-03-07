@@ -152,7 +152,7 @@ class Event:
         self.uid = None
         self.recurring = False
         self.cancelled = False
-        self._e = None
+        self._e = {}
 
     def pkg(self, tzname):
         pkgd = {
@@ -209,11 +209,17 @@ def _ev_entry(ev):
         'enddate': as_date(ev.end, endtime=True),
         'cancelled': ev.cancelled,
         'calendar': ev.calendar,
+        'description': ev._e.get('description', ""),
+        'link': ev.link,
         'hastime': isinstance(ev.start, datetime),
         'root_id': ev._e.get('recurringEventId', ev.id),
         'startdate_index': as_date(ev.start).toordinal(),
         'blob': pickle.dumps(ev._e, protocol=-1),
     }
+
+
+with mock_patch('pickle.dumps'):
+    DB_KEYS = list(_ev_entry(MagicMock()).keys())
 
 
 def get_visible_cals(cals):
@@ -247,12 +253,10 @@ def get_visible_cals(cals):
     return allCals
 
 
-def download_evts(calendar=None, in_loop=False):
-    db = sqlite3.connect('evts.sqlite3')
-    with mock_patch('pickle.dumps'):
-        keys = list(_ev_entry(MagicMock()).keys())
+def ensure_db(dbname):
+    db = sqlite3.connect(dbname)
     db.execute(
-        f'create table if not exists events (id PRIMARY KEY,{",".join(keys[1:])})'
+        f'create table if not exists events (id PRIMARY KEY,{",".join(DB_KEYS[1:])})'
     )
     db.execute(
         f'create index if not exists id_date on events (root_id, startdate_index)'
@@ -267,11 +271,26 @@ def download_evts(calendar=None, in_loop=False):
                group by a.id
                '''
     )
+    return db
+
+
+def insert_or_update_entries(db, entries):
+    db.executemany(
+        f'''insert into events values ({",".join(f":{key}" for key in DB_KEYS)})
+            on conflict(id) do update set {",".join(f"{key}=:{key}" for key in DB_KEYS[1:])}''',
+        map(_ev_entry, entries),
+    )
+
+
+def download_evts(calendar=None, in_loop=False):
+    db = ensure_db('evts.sqlite3')
+
     now = datetime.now(tzlocal())
     tries_remaining = 2 if not in_loop else 5
     while tries_remaining:
         try:
             tries_remaining -= 1
+            print('downloading calendar list...')
             cals = s().calendarList().list().execute()['items']
             break
         except Exception as e:
@@ -290,6 +309,8 @@ def download_evts(calendar=None, in_loop=False):
     try:
         old_obj = load_evts(print_warning=False, partial=True)
         for cal in old_obj['calendars']:
+            if cal['id'] not in calmap:
+                continue
             calmap[cal['id']]['syncToken'] = cal.get('syncToken')
     except FileNotFoundError:
         pass
@@ -335,17 +356,15 @@ def download_evts(calendar=None, in_loop=False):
             deleting = []
             for e in r['items']:
                 if e['status'] == 'cancelled':
-                    deleting.append((e['id'],))
+                    deleting.append((e['id'], calId))
                 else:
                     ev = Event.unpkg(e)
                     ev.calendar = calId
-                    entries.append(_ev_entry(ev))
+                    entries.append(ev)
+            insert_or_update_entries(db, entries)
             db.executemany(
-                f'''insert into events values ({",".join(f":{key}" for key in keys)})
-                    on conflict(id) do update set {",".join(f"{key}=:{key}" for key in keys[1:])}''',
-                entries,
+                f'''delete from events where id = ? and calendar = ?''', deleting
             )
-            db.executemany(f'''delete from events where id = ?''', deleting)
             if 'nextPageToken' in r:
                 kwargs['pageToken'] = r['nextPageToken']
                 continue

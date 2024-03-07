@@ -352,14 +352,16 @@ class Agenda:
             tzinfo=thetime.tzinfo,
         )
 
-    def agenda_table(self, todate, ndays=None, min_start=None, print_warning=True):
+    def agenda_table(self, todate, ndays=None, min_start=None, max_end=None, print_warning=True):
         self.todate = todate
         self.has_later = False
 
         if min_start is None:
             min_start = time(tzinfo=tzlocal())
         else:
-            min_start = self.quantize(datetime.combine(todate, min_start)).time()
+            min_start = self.quantize(datetime.combine(todate, min_start)).timetz()
+        if max_end is not None:
+            max_end = self.quantize(datetime.combine(todate, max_end)).timetz()
 
         # table[0] is the time column
         # table[n] is the event column for day n
@@ -408,33 +410,39 @@ class Agenda:
                 continue
             # timeblock event
             if startindex >= 0:
-                tickt = self.quantize(evt.start).time()
+                tickt = self.quantize(evt.start).timetz()
             else:
                 tickt = min_start
             tickt = max(min_start, tickt)
-            if evt.end.time() > min_start or evt.end.date() > evt.start.date():
-                table[0][tickt] = tickt
-                table[index][tickt].append(evt)
+            if evt.end.timetz() > min_start or evt.end.date() > evt.start.date():
+                # XXX need to either figure out why this happens
+                # or fix the logic above
+                if index < len(table):
+                    table[0][tickt] = tickt
+                    table[index][tickt].append(evt)
 
         return table
 
     # convenience for looping over changing column(s)
-    def _intervals(self, *cols, start_min=False):
+    def _intervals(self, *cols, start_min=False, end_max=None):
         if not any(cols):
             return
         minutes = 0
-        tickt = time()
+        tickt = time(tzinfo=tzlocal())
         if start_min:
-            tickt = min(min(col.keys(), default=time()) for col in cols)
+            tickt = min(min(col.keys(), default=time(tzinfo=tzlocal())) for col in cols)
             if isinstance(start_min, time):
                 tickt = min(start_min, tickt)
             minutes = tickt.hour * 60 + tickt.minute
-        while tickt <= max(max(col.keys(), default=time()) for col in cols):
+        endtime = max(max(col.keys(), default=time(tzinfo=tzlocal())) for col in cols)
+        if isinstance(end_max, time):
+            endtime = max(max((c for c in col.keys() if c <= end_max), default=time(tzinfo=tzlocal())) for col in cols)
+        while tickt <= endtime:
             yield tickt
             minutes += self.interval.seconds // 60
             if minutes >= 24 * 60:
                 break
-            tickt = time(*divmod(minutes, 60))
+            tickt = time(*divmod(minutes, 60), tzinfo=tzlocal())
 
     # convenience for looping until an end time
     def _until(self, starttick, endtick):
@@ -527,7 +535,7 @@ class Agenda:
                             if locations and locstrs:
                                 text += locstrs.pop(0) + '  '
                             text = fg(self.evt2short(evt)) + text + RESET
-                            contents[endtick.time()].append(
+                            contents[endtick.timetz()].append(
                                 (col_index + col_offset, initial, text)
                             )
                             endtick += self.interval
@@ -580,11 +588,11 @@ class Agenda:
 
         contents = self._evtcol(evtcol, forced=forced, nowtick=nowtick, locations=True)
 
-        lasttick = max(contents.keys(), default=time())
+        lasttick = max(contents.keys(), default=time(tzinfo=tzlocal()))
         if is_todate:
             # make sure there's a ddict key entry for nowtick
             # so that self._intervals iterates at least that far
-            contents[nowtick.time()]
+            contents[nowtick.timetz()]
 
         # assemble newtable from contents
         for tickt in self._intervals(contents):
@@ -1052,6 +1060,7 @@ def weekview(
     interval=None,
     min_start=None,
     max_start=None,
+    max_end=None,
 ):
     table_width = week_ndays if week_ndays > 0 else 7
     interval = interval or 30
@@ -1071,18 +1080,20 @@ def weekview(
         min_start = time(*min_start, tzinfo=tzlocal())
     if max_start is not None:
         max_start = time(*max_start, tzinfo=tzlocal())
+    if max_end is not None:
+        max_end = time(*max_end, tzinfo=tzlocal())
     timecol, *evtcols = agendamaker.agenda_table(
         weekstart,
         ndays=table_width,
         min_start=min_start,
     )
     if max_start is not None:
-        max_start = agendamaker.quantize(datetime.combine(weekstart, max_start)).time()
+        max_start = agendamaker.quantize(datetime.combine(weekstart, max_start)).timetz()
         timecol[max_start] = max_start
 
     todate_offset = (agendamaker.now.date() - weekstart).days
     has_todate = 0 <= todate_offset < week_ndays
-    nowtick = agendamaker.quantize(agendamaker.now).time()
+    nowtick = agendamaker.quantize(agendamaker.now).timetz()
 
     timecolsz = len(ftime()) + 1
     longest_summary = max(
@@ -1139,20 +1150,25 @@ def weekview(
 
     newtable = []
 
-    def do_row(tickt, fill, left, mid=None, right=None, _thick=None):
+    def do_row(tickt, fill, left, mid=None, right=None, _thick=None, color=None):
+        dashcolor = ""
+        pipecolor = ""
+        if color:
+            dashcolor = color
+            pipecolor = LGRAY
         if mid is None:
             mid = left
         if right is None:
             right = left
-        line = left
+        line = pipecolor + left
         for _ in range(table_width):
-            line += fill * inner_width + mid
-        line = line[:-1] + right
+            line += dashcolor + fill * inner_width + pipecolor + mid
+        line = line[:-1] + pipecolor + right
         if isinstance(tickt, str):
-            timestr = tickt * timecolsz
+            timestr = dashcolor + tickt * timecolsz
         else:
-            timestr = '{:>{}}'.format(ftime(tickt).strip() + ' ', timecolsz)
-        return LGRAY + timestr + line + RESET
+            timestr = LGRAY + '{:>{}}'.format(ftime(tickt).strip() + ' ', timecolsz)
+        return (LGRAY if not color else "") + timestr + line + RESET
 
     def assemble_row(tickt, iterable_or_fn, row=None):
         def calc_initial(i, initial):
@@ -1218,9 +1234,10 @@ def weekview(
         newtable.append(assemble_row(None, lambda i: daycols[i][j]))
 
     # assemble timeblocks
-    newtable.append(do_row(DASH, DASH, CORNERS[1][1], *CORNERS[1][1:]))
+    # newtable.append(do_row(DASH, DASH, CORNERS[1][1], *CORNERS[1][1:]))
+    newtable.append(do_row(DASH, DASH, PIPE, PIPE, color=MLGRAY))
     for tickt in agendamaker._intervals(
-        contents, start_min=(True if max_start is None else max_start)
+        contents, start_min=(True if max_start is None else max_start), end_max=max_end
     ):
         row = None
         if has_todate and tickt == nowtick:
@@ -1238,6 +1255,9 @@ def weekview(
             )
             row = pipeline + RESET
         newtable.append(assemble_row(timecol[tickt], contents[tickt], row))
+
+    if outofdate := string_outofdate(objs[0], agendamaker.now):
+        newtable[1] = place(f" {outofdate} ", timecolsz + 2, newtable[1])
 
     return newtable
 
@@ -1351,19 +1371,30 @@ def parse_args(args=None):
         action='store',
         help="start the week's day at this time",
     )
+    parser.add_argument(
+        '-e',
+        '--max-end',
+        metavar='N',
+        action='store',
+        help="end the week's day not after this time",
+    )
     parser.add_argument('date', nargs='*', help='use this date instead of today')
-    args, remain = parser.parse_known_args(args)
-    if remain:
-        raise Exception('unrecognized arguments: {}'.format(' '.join(remain)))
+    args = parser.parse_args(args)
 
     if args.force_ipv4:
         ipv4_monkey_patch()
 
     if args.download_only:
+        print('loading http auth... ', end='', flush=True)
+        gcal.s()
+        print('done!')
         gcal.download_evts()
         print('loaded ok:', datetime.now())
         exit(0)
     elif args.download_cal:
+        print('loading http auth... ', end='', flush=True)
+        gcal.s()
+        print('done!')
         gcal.download_evts(args.download_cal)
         print('loaded ok:', datetime.now())
         exit(0)
@@ -1418,10 +1449,11 @@ def parse_args(args=None):
     objs = load_evts()
 
     if args.list_known_calendars:
-        table = [
-            f"{key}\t{value}"
-            for key, value in gcal.get_visible_cals(objs[0]['calendars']).items()
-        ]
+        table = []
+        for key, value in gcal.get_visible_cals(objs[0]['calendars']).items():
+            if isinstance(value, list):
+                value = ' '.join(value)
+            table.append(f"{key}\t{value}")
     elif args.list_calendar:
         table = listcal(
             aday,
@@ -1471,6 +1503,8 @@ def parse_args(args=None):
                 raise Exception("can't specify both min start and start time")
         if isinstance(args.min_start, str):
             args.min_start = map(int, args.min_start.split(':'))
+        if isinstance(args.max_end, str):
+            args.max_end = map(int, args.max_end.split(':'))
 
         table = weekview(
             aday,
@@ -1482,6 +1516,7 @@ def parse_args(args=None):
             interval=args.interval,
             min_start=args.min_start,
             max_start=args.start_time,
+            max_end=args.max_end,
             objs=objs,
         )
     else:
