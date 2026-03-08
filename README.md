@@ -23,7 +23,7 @@ pip install -r requirements.txt
 ## Setup
 
 You will need to create an OAuth 2.0 Client, which you can do at [the Google API Console](https://console.developers.google.com/apis/credentials).
-Download the JSON file containint the client secrets and store it in `client_secret.json`.
+Download the JSON file containing the client secrets and store it in `client_secret.json`.
 
 The first time you run `./agenda.py` it will request OAuth credentials for your account.
 Go to the URL it displays, allow access, and paste the credential back in the terminal.
