@@ -251,7 +251,7 @@ def filter_calendars(obj, calendars):
 def string_outofdate(obj, now=None):
     if not now:
         now = datetime.now(tzlocal())
-    if obj['timestamp'] + t(minutes=24 * 60) < now:
+    if obj['timestamp'] + t(hours=12) < now:
         return (
             fg(3)
             + 'Warning: timestamp is out of date by '
