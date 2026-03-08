@@ -66,7 +66,7 @@ def new_auth(filename, scope='https://www.googleapis.com/auth/calendar'):
             file=sys.stderr,
         )
         exit(1)
-    credentials = flow.run_console()
+    credentials = flow.run_local_server(open_browser=False)
 
     info = {
         'token': credentials.token,
