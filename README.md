@@ -25,12 +25,12 @@ pip install -r requirements.txt
 You will need to create an OAuth 2.0 Client, which you can do at [the Google API Console](https://console.developers.google.com/apis/credentials).
 Download the JSON file containing the client secrets and store it in `client_secret.json`.
 
-The first time you run `./agenda.py` it will request OAuth credentials for your account.
+The first time you run `./agenda.py -d` it will request OAuth credentials for your account.
 Go to the URL it displays, allow access, and paste the credential back in the terminal.
 
 ## Configuration
 
-After finishing setup, the first time you successfully run `./agenda.py` it will create a file `calendars.yaml`
+After finishing setup, the first time you successfully run `./agenda.py -d` it will create a file `calendars.yaml`
 listing the subset of calendars you've selected in Google Calendar, in the form of an ordered dictionary.
 
 For each entry, the key is the short name you wish to use to refer to the calendar, and the value is the calendar ID.
