@@ -297,7 +297,7 @@ def get_events(obj, todate, ndays, callist, local_recurring=False):
                  and calendar in ({','.join("?"*len(callist))})
                 order by startdate, hastime, datetime(start), datetime(end) desc
         """,
-            (todate, todate, ndays, *callist),
+            (str(todate), str(todate), ndays, *callist),
         )
     else:
         rows = obj['db'].execute(
@@ -310,7 +310,7 @@ def get_events(obj, todate, ndays, callist, local_recurring=False):
                 group by root_id
                 order by startdate, hastime, datetime(start), datetime(end) desc
         """,
-            (todate, *callist),
+            (str(todate), *callist),
         )
 
     for _, blob, recurs_locally, _ in rows:
