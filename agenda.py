@@ -191,8 +191,9 @@ def dtime(dt=None, shrink=False):
 def ftime(dt=None, now=False):
     if not dt:
         return '      '
-    s = dt.strftime('%I:%M%P')
-    s = re.sub(r'm$', '', s)
+    s = dt.strftime('%I:%M%p')
+    s = re.sub(r'AM$', 'a', s)
+    s = re.sub(r'PM$', 'p', s)
     s = re.sub(r'^0', ' ', s)
     if not now:
         s = re.sub(r':00([ap])', r'\1   ', s)
