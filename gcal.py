@@ -320,63 +320,86 @@ def download_evts(calendar=None, in_loop=False):
     else:
         calsToDownload = allCals.values()
 
+    reqs = {}
+    def _handleGetEvts(reqId, res, exc):
+        kwargs, pagenum = reqs[reqId]
+        calId = kwargs['calendarId']
+        if exc is not None:
+            if isinstance(exc, HttpError) and int(exc.resp['status']) == 410:
+                print(f"  410'd, redownloading {calId}...")
+                db.execute(f'''delete from events where calendar = ?''', (calId,))
+                db.commit()
+                calmap[calId].pop('syncToken', None)
+                if 'syncToken' in kwargs:
+                    del kwargs['syncToken']
+                if 'pageToken' in kwargs:
+                    del kwargs['pageToken']
+                reqId = f"{calId}"
+                reqs[reqId] = (kwargs, 1)
+                _addQuery(reqId, s().events().list(**kwargs))
+                return
+            else:
+                print(repr(exc))
+                import traceback
+                traceback.print_exc()
+                return
+        entries = []
+        deleting = []
+        for e in res['items']:
+            if e['status'] == 'cancelled':
+                deleting.append((e['id'], calId))
+            else:
+                ev = Event.unpkg(e)
+                ev.calendar = calId
+                entries.append(ev)
+        insert_or_update_entries(db, entries)
+        db.executemany(
+                f'''delete from events where id = ? and calendar = ?''', deleting
+                )
+        db.commit()
+        if 'nextPageToken' in res:
+            kwargs['pageToken'] = res['nextPageToken']
+            print(f'  downloading {calId} page {pagenum+1}...')
+            reqId = f"{calId}||{kwargs['pageToken']}"
+            reqs[reqId] = (kwargs, pagenum+1)
+            _addQuery(reqId, s().events().list(**kwargs))
+        elif 'nextSyncToken' in res:
+            calmap[calId]['syncToken'] = res['nextSyncToken']
+
+    nextBatch = None
+    hasEvts = None
+    def _newBatch():
+        nonlocal nextBatch, hasEvts
+        nextBatch = newBatch(_handleGetEvts)
+        hasEvts = False
+    def _addQuery(reqId, q):
+        nonlocal hasEvts
+        nextBatch.add(q, request_id=reqId)
+        hasEvts = True
+    _newBatch()
     for calId in calsToDownload:
         if not isinstance(calId, str) or '@' not in calId:
             continue
         print(f'downloading {calId}...')
+        syncToken = calmap[calId].get('syncToken')
         kwargs = {
             'calendarId': calId,
             'singleEvents': True,
             'maxResults': 2500,
-            'syncToken': calmap[calId].get('syncToken'),
+            'syncToken': syncToken,
         }
-        pagenum = 0
-        while True:
-            pagenum += 1
-            if pagenum > 1:
-                print(f'  downloading page {pagenum}...')
-            try:
-                r = s().events().list(**kwargs).execute()
-            except HttpError as e:
-                if int(e.resp['status']) == 410:
-                    print("  410'd, redownloading...")
-                    db.execute(f'''delete from events where calendar = ?''', (calId,))
-                    calmap[calId].pop('syncToken', None)
-                    if 'syncToken' in kwargs:
-                        del kwargs['syncToken']
-                    if 'pageToken' in kwargs:
-                        del kwargs['pageToken']
-                    pagenum = 0
-                    continue
-                else:
-                    raise
-            except Exception as e:
-                print(repr(e))
-            entries = []
-            deleting = []
-            for e in r['items']:
-                if e['status'] == 'cancelled':
-                    deleting.append((e['id'], calId))
-                else:
-                    ev = Event.unpkg(e)
-                    ev.calendar = calId
-                    entries.append(ev)
-            insert_or_update_entries(db, entries)
-            db.executemany(
-                f'''delete from events where id = ? and calendar = ?''', deleting
-            )
-            if 'nextPageToken' in r:
-                kwargs['pageToken'] = r['nextPageToken']
-                continue
-            if 'nextSyncToken' in r:
-                calmap[calId]['syncToken'] = r['nextSyncToken']
-            break
-        db.commit()
+        reqId = f"{calId}||{syncToken}"
+        reqs[reqId] = (kwargs, 1)
+        _addQuery(reqId, s().events().list(**kwargs))
+    while hasEvts:
+        batch = nextBatch
+        _newBatch()
+        batch.execute()
+
     with open('evts.yaml', 'w') as f:
         yaml.dump(obj, f, default_flow_style=False)
     with open('evts.pickle', 'wb') as f:
         pickle.dump(obj, f, protocol=-1)
-    db.commit()
     return obj
 
 
@@ -423,6 +446,10 @@ def s():
 
         HttpError = googleapiclient.errors.HttpError
     return _service
+
+
+def newBatch(callback=None):
+    return s().new_batch_http_request(callback=callback)
 
 
 def submit(evt, tzname, calId):
